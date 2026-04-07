@@ -5,16 +5,19 @@ import (
 	"os"
 )
 
-// Selectors represents the CSS selectors used for scraping
-type Selectors struct {
+// PlatformSelectors represents the CSS selectors for a single platform
+type PlatformSelectors struct {
 	Title    string `json:"title"`
 	Price    string `json:"price"`
 	MRP      string `json:"mrp"`
 	Features string `json:"features"`
 }
 
-// LoadSelectors loads the CSS selectors from the given path
-func LoadSelectors(path string) (*Selectors, error) {
+// Selectors maps platform names to their respective PlatformSelectors
+type Selectors map[string]PlatformSelectors
+
+// LoadSelectors loads the multi-platform CSS selectors from the given path
+func LoadSelectors(path string) (Selectors, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -26,5 +29,5 @@ func LoadSelectors(path string) (*Selectors, error) {
 		return nil, err
 	}
 
-	return &selectors, nil
+	return selectors, nil
 }
