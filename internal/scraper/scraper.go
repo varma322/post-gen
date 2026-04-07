@@ -3,6 +3,7 @@ package scraper
 import (
 	"errors"
 	"fmt"
+	"log"
 	"math/rand"
 	"net/http"
 	"regexp"
@@ -24,26 +25,56 @@ var userAgents = []string{
 
 // ScrapeProduct fetches and parses the product details from the given URL.
 func ScrapeProduct(url string, sel *config.Selectors) (*models.Product, error) {
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
+	maxRetries := 3
+	var res *http.Response
+	var err error
 
-	// Basic anti-block header
-	rand.Seed(time.Now().UnixNano())
-	req.Header.Set("User-Agent", userAgents[rand.Intn(len(userAgents))])
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Anti-block: Random rate-limiting delay between 1 and 3 seconds
+		rand.Seed(time.Now().UnixNano())
+		delay := time.Duration(rand.Intn(3)+1) * time.Second
+		if attempt > 1 {
+			log.Printf("Attempt %d/%d: Retrying after %v...", attempt, maxRetries, delay)
+		} else {
+			// Optional tiny delay even on first attempt could help but omitted for speed.
+			// Let's add a small random delay initially too, to simulate human pacing.
+			time.Sleep(time.Duration(rand.Intn(1000)) * time.Millisecond)
+		}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	res, err := client.Do(req)
-	if err != nil {
-		return nil, err
+		if attempt > 1 {
+			time.Sleep(delay)
+		}
+
+		req, reqErr := http.NewRequest("GET", url, nil)
+		if reqErr != nil {
+			return nil, reqErr
+		}
+
+		// Basic anti-block header
+		req.Header.Set("User-Agent", userAgents[rand.Intn(len(userAgents))])
+		req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+
+		client := &http.Client{Timeout: 15 * time.Second}
+		res, err = client.Do(req)
+
+		if err == nil && res.StatusCode == 200 {
+			break // Success, exit retry loop
+		}
+
+		// Need to close body if we got a response but it wasn't 200 (e.g. 503)
+		if res != nil {
+			res.Body.Close()
+		}
+
+		if attempt == maxRetries {
+			if err != nil {
+				return nil, err
+			}
+			return nil, fmt.Errorf("status code error: %d %s", res.StatusCode, res.Status)
+		}
 	}
 	defer res.Body.Close()
-
-	if res.StatusCode != 200 {
-		return nil, fmt.Errorf("status code error: %d %s", res.StatusCode, res.Status)
-	}
 
 	// Load the HTML document
 	doc, err := goquery.NewDocumentFromReader(res.Body)

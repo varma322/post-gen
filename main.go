@@ -53,6 +53,11 @@ func main() {
 	product.Tagline = "Don't miss out on this amazing deal!"
 	product.Hashtags = "#AmazonDeals #Offers #MustHave"
 
+	// Output directory creation
+	if err := os.MkdirAll("output", os.ModePerm); err != nil {
+		log.Fatalf("Error creating output directory: %v", err)
+	}
+
 	if *allAccounts {
 		for _, acc := range accounts {
 			generateForAccount(acc, product)
