@@ -40,9 +40,15 @@ func main() {
 		log.Fatalf("Error loading selectors: %v", err)
 	}
 
+	// Get platform-specific scraper
+	s, err := scraper.GetScraper(*url, sel)
+	if err != nil {
+		log.Fatalf("Error getting scraper: %v", err)
+	}
+
 	// Scrape Product Data
-	fmt.Println("Scraping product data from Amazon...")
-	scrapedProduct, err := scraper.ScrapeProduct(*url, sel)
+	fmt.Printf("Scraping product data from %s...\n", *url)
+	scrapedProduct, err := s.Scrape(*url)
 	if err != nil {
 		log.Fatalf("Error scraping product: %v", err)
 	}
