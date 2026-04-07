@@ -1,0 +1,13 @@
+🔥 {{.Title}} 🔥
+
+🔹 Key Features
+{{- range .Features}}
+✔️ {{.}}
+{{- end}}
+
+💰 Price
+💵 ₹{{.DealPrice}}
+
+👉 {{.Link}}
+
+{{if .Hashtags}}{{.Hashtags}}{{else}}#Deals #AmazonFinds #SmartBuy{{end}}

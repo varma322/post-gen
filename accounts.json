@@ -1,0 +1,26 @@
+[
+  {
+    "name": "afficart",
+    "template_path": "templates/afficart.tmpl"
+  },
+  {
+    "name": "priceswoop",
+    "template_path": "templates/priceswoop.tmpl"
+  },
+  {
+    "name": "zonerush",
+    "template_path": "templates/zonerush.tmpl"
+  },
+  {
+    "name": "smartbuy",
+    "template_path": "templates/smartbuy.tmpl"
+  },
+  {
+    "name": "dealsvault",
+    "template_path": "templates/dealsvault.tmpl"
+  },
+  {
+    "name": "notyoffers",
+    "template_path": "templates/notyoffers.tmpl"
+  }
+]

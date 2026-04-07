@@ -1,0 +1,14 @@
+{{.Title}}
+
+💰 Price: ₹{{.DealPrice}}{{if .Discount}} ({{.Discount}}% Off){{end}}
+{{if .MRP}}💵 M.R.P.: ₹{{.MRP}}{{end}}
+📦 Inclusive of All Taxes
+
+{{.Link}}
+
+Highlights:
+{{- range .Features}}
+✅ {{.}}
+{{- end}}
+
+✨ {{if .Tagline}}{{.Tagline}}{{else}}Perfect choice for everyday use!{{end}}

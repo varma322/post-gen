@@ -1,0 +1,12 @@
+{{if .Headline}}{{.Headline}}{{else}}{{.Title}}{{end}}
+
+{{if .Description}}{{.Description}}{{end}}
+
+{{- range .Features}}
+✅ {{.}}
+{{- end}}
+
+💥 Price: ₹{{.DealPrice}}{{if .Discount}} ({{.Discount}}% OFF){{end}}
+🚚 Fulfilled by Amazon | Inclusive of All Taxes
+
+{{.Link}}

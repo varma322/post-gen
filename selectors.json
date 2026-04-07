@@ -1,0 +1,6 @@
+{
+  "title": "#productTitle",
+  "price": "#corePriceDisplay_desktop_feature_div .a-price-whole, #corePrice_desktop .a-price-whole, .priceToPay .a-price-whole, .apexPriceToPay .a-offscreen",
+  "mrp": ".a-text-price .a-offscreen, #corePriceDisplay_desktop_feature_div .a-text-price .a-offscreen, .basisPrice .a-offscreen",
+  "features": "#feature-bullets li span.a-list-item"
+}

@@ -1,0 +1,11 @@
+{{.Title}}
+
+✨ Why You’ll Love It:
+{{- range .Features}}
+{{.}}
+{{- end}}
+
+💰 Deal Price: ₹{{.DealPrice}}{{if .Discount}} ({{.Discount}}% OFF!){{end}}
+🛒 Buy on Amazon: {{.Link}}
+
+✨ {{if .Tagline}}{{.Tagline}}{{else}}Grab this deal before it’s gone!{{end}}
