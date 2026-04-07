@@ -98,11 +98,16 @@ func ScrapeProduct(url string, sel *config.Selectors) (*models.Product, error) {
 		}
 	})
 
+	// Limit features to 6 to prevent messy templates
+	if len(product.Features) > 6 {
+		product.Features = product.Features[:6]
+	}
+
 	// Calculate discount
 	product.Discount = calculateDiscount(product.DealPrice, product.MRP)
 
-	if product.Title == "" {
-		return nil, errors.New("failed to extract product title - possible layout change or CAPTCHA")
+	if product.Title == "" || product.DealPrice == "" {
+		return nil, errors.New("failed to extract product title or price - possible layout change, block, or CAPTCHA")
 	}
 
 	return &product, nil
