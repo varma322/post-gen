@@ -60,7 +60,8 @@ func main() {
 
 	var urls []string
 	if *url != "" {
-		urls = append(urls, *url)
+		trimmedURL := strings.TrimSpace(*url)
+		urls = append(urls, trimmedURL)
 	}
 
 	if *filePath != "" {
@@ -76,6 +77,12 @@ func main() {
 	for i, u := range urls {
 		progress := fmt.Sprintf("[%d/%d]", i+1, total)
 		log.Printf("%s Processing URL: %s", progress, u)
+
+		// 0. Validate URL
+		if !scraper.IsValidURL(u) {
+			log.Printf("%s [ERR] Invalid URL format: %s", progress, u)
+			continue
+		}
 
 		// 1. Get Scraper
 		s, err := scraper.GetScraper(u, sel)

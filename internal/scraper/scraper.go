@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -21,7 +22,7 @@ type Scraper interface {
 
 // GetScraper returns an appropriate Scraper implementation based on the URL domain.
 func GetScraper(url string, allSelectors config.Selectors) (Scraper, error) {
-	if strings.Contains(url, "amazon") {
+	if strings.Contains(url, "amazon") || strings.Contains(url, "amzn.") {
 		sel, ok := allSelectors["amazon"]
 		if !ok {
 			return nil, errors.New("amazon selectors missing from selectors.json")
@@ -42,6 +43,19 @@ var userAgents = []string{
 }
 
 // Shared Utilities for scrapers
+
+// IsValidURL checks if a string is a valid URL with a scheme and host.
+func IsValidURL(u string) bool {
+	_, err := url.ParseRequestURI(u)
+	if err != nil {
+		return false
+	}
+	parsed, err := url.Parse(u)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return false
+	}
+	return true
+}
 
 func cleanText(text string) string {
 	text = strings.TrimSpace(text)
