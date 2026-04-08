@@ -13,6 +13,8 @@ import (
 
 	"post-gen/internal/config"
 	"post-gen/internal/models"
+
+	"github.com/PuerkitoBio/goquery"
 )
 
 // Scraper defines the interface for platform-specific scraping logic.
@@ -55,6 +57,22 @@ func IsValidURL(u string) bool {
 		return false
 	}
 	return true
+}
+
+// FindFirst tries multiple comma-separated selectors and returns the first non-empty result.
+func FindFirst(doc *goquery.Document, selectors string, cleaner func(string) string) string {
+	parts := strings.Split(selectors, ",")
+	for _, s := range parts {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		val := cleaner(doc.Find(s).First().Text())
+		if val != "" {
+			return val
+		}
+	}
+	return ""
 }
 
 func cleanText(text string) string {

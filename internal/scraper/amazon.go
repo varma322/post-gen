@@ -84,9 +84,9 @@ func (a *AmazonScraper) Scrape(url string) (*models.Product, error) {
 	product.Link = url
 
 	// Extract data using platform-specific selectors
-	product.Title = cleanText(doc.Find(a.Sel.Title).First().Text())
-	product.DealPrice = cleanPrice(doc.Find(a.Sel.Price).First().Text())
-	product.MRP = cleanPrice(doc.Find(a.Sel.MRP).First().Text())
+	product.Title = FindFirst(doc, a.Sel.Title, cleanText)
+	product.DealPrice = FindFirst(doc, a.Sel.Price, cleanPrice)
+	product.MRP = FindFirst(doc, a.Sel.MRP, cleanPrice)
 
 	// Features
 	doc.Find(a.Sel.Features).Each(func(i int, s *goquery.Selection) {
