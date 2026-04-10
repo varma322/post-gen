@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"time"
 
@@ -31,17 +32,9 @@ func (a *AmazonScraper) Scrape(url string) (*models.Product, error) {
 	var err error
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		// Anti-block: Random rate-limiting delay between 1 and 3 seconds
-		delay := time.Duration(rand.Intn(3)+1) * time.Second
-		if attempt > 1 {
-			log.Printf("[INFO] Attempt %d/%d: Retrying after %v...", attempt, maxRetries, delay)
-		} else {
-			// Small random sleep to simulate human usage pace
+		if attempt == 1 {
+			// Small random initial delay to simulate human pace
 			time.Sleep(time.Duration(rand.Intn(1000)) * time.Millisecond)
-		}
-
-		if attempt > 1 {
-			time.Sleep(delay)
 		}
 
 		req, reqErr := http.NewRequest("GET", url, nil)
@@ -49,7 +42,6 @@ func (a *AmazonScraper) Scrape(url string) (*models.Product, error) {
 			return nil, reqErr
 		}
 
-		// Basic anti-block headers
 		req.Header.Set("User-Agent", getRandomUserAgent())
 		req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
@@ -58,19 +50,53 @@ func (a *AmazonScraper) Scrape(url string) (*models.Product, error) {
 		res, err = client.Do(req)
 
 		if err == nil && res.StatusCode == 200 {
-			break // Success, exit retry loop
+			break // Success
 		}
 
-		if res != nil {
-			res.Body.Close()
-		}
+		// --- Classify the error ---
+		isLastAttempt := attempt == maxRetries
 
-		if attempt == maxRetries {
-			if err != nil {
+		if err != nil {
+			// Check for timeout specifically
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				log.Printf("[TIMEOUT] Attempt %d/%d timed out. %s", attempt, maxRetries, retryMsg(isLastAttempt))
+			} else {
+				log.Printf("[NET_ERR] Attempt %d/%d network error: %v. %s", attempt, maxRetries, err, retryMsg(isLastAttempt))
+			}
+			if isLastAttempt {
 				return nil, err
 			}
-			return nil, fmt.Errorf("status code error: %d %s", res.StatusCode, res.Status)
+			time.Sleep(time.Duration(rand.Intn(3)+2) * time.Second) // 2–4s retry delay
+			continue
 		}
+
+		// HTTP error response
+		statusCode := res.StatusCode
+		res.Body.Close()
+
+		if statusCode == 403 {
+			// Hard block — retrying won't help
+			log.Printf("[BLOCKED] Attempt %d/%d: HTTP 403 Forbidden. Amazon has blocked this request. Aborting retries.", attempt, maxRetries)
+			return nil, fmt.Errorf("HTTP 403: Amazon returned a hard block (Forbidden)")
+		}
+
+		if statusCode == 429 {
+			// Rate-limited — back off longer before retrying
+			backoff := time.Duration(rand.Intn(10)+10) * time.Second // 10–20s
+			log.Printf("[RATE_LIMITED] Attempt %d/%d: HTTP 429 Too Many Requests. %s (backoff: %v)", attempt, maxRetries, retryMsg(isLastAttempt), backoff)
+			if isLastAttempt {
+				return nil, fmt.Errorf("HTTP 429: Amazon rate-limited this request after %d attempts", maxRetries)
+			}
+			time.Sleep(backoff)
+			continue
+		}
+
+		// Other HTTP status (5xx, 4xx, etc.)
+		log.Printf("[HTTP_ERR] Attempt %d/%d: HTTP %d %s. %s", attempt, maxRetries, statusCode, res.Status, retryMsg(isLastAttempt))
+		if isLastAttempt {
+			return nil, fmt.Errorf("HTTP %d: %s after %d attempts", statusCode, res.Status, maxRetries)
+		}
+		time.Sleep(time.Duration(rand.Intn(3)+1) * time.Second) // 1–3s retry delay
 	}
 	defer res.Body.Close()
 

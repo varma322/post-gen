@@ -44,6 +44,10 @@ var userAgents = []string{
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/110.0",
 }
 
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
 // Shared Utilities for scrapers
 
 // IsValidURL checks if a string is a valid URL with a scheme and host.
@@ -57,6 +61,14 @@ func IsValidURL(u string) bool {
 		return false
 	}
 	return true
+}
+
+// retryMsg returns a human-readable retry hint based on whether this is the last attempt.
+func retryMsg(isLast bool) string {
+	if isLast {
+		return "No more retries."
+	}
+	return "Will retry..."
 }
 
 // FindFirst tries multiple comma-separated selectors and returns the first non-empty result.
@@ -111,6 +123,5 @@ func getHttpClient() *http.Client {
 }
 
 func getRandomUserAgent() string {
-	rand.Seed(time.Now().UnixNano())
 	return userAgents[rand.Intn(len(userAgents))]
 }
