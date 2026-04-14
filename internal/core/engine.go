@@ -6,6 +6,7 @@ import (
 	"post-gen/internal/generator"
 	"post-gen/internal/models"
 	"post-gen/internal/scraper"
+	"post-gen/internal/utils"
 )
 
 const (
@@ -65,7 +66,7 @@ func (e *Engine) GeneratePosts(urls []string, accountNames []string) ([]Result, 
 
 	results := make([]Result, 0, len(urls)*len(targetAccounts))
 	for _, rawURL := range urls {
-		url := rawURL
+		url := utils.NormalizeURL(rawURL)
 		if !scraper.IsValidURL(url) {
 			results = append(results, Result{
 				URL:   url,
@@ -95,13 +96,16 @@ func (e *Engine) GeneratePosts(urls []string, accountNames []string) ([]Result, 
 		enrichProduct(product)
 
 		for _, account := range targetAccounts {
-			post, err := e.postGenerator(*product, account.TemplatePath)
+			productForAccount := *product
+			productForAccount.Link = utils.AddAffiliateTag(url, account.AffiliateTag)
+
+			post, err := e.postGenerator(productForAccount, account.TemplatePath)
 			result := Result{
 				URL:          url,
 				Account:      account.Name,
 				Output:       post,
-				ProductTitle: product.Title,
-				Product:      *product,
+				ProductTitle: productForAccount.Title,
+				Product:      productForAccount,
 			}
 			if err != nil {
 				result.Output = ""

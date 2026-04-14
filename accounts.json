@@ -1,26 +1,32 @@
 [
   {
     "name": "afficart",
-    "template_path": "templates/afficart.tmpl"
+	"template_path": "templates/afficart.tmpl",
+	"affiliate_tag": "afficartzone-21"
   },
   {
     "name": "priceswoop",
-    "template_path": "templates/priceswoop.tmpl"
+	"template_path": "templates/priceswoop.tmpl",
+	"affiliate_tag": "priceswoop04-21"
   },
   {
     "name": "zonerush",
-    "template_path": "templates/zonerush.tmpl"
+	"template_path": "templates/zonerush.tmpl",
+	"affiliate_tag": "zonrushdeal01-21"
   },
   {
     "name": "smartbuy",
-    "template_path": "templates/smartbuy.tmpl"
+	"template_path": "templates/smartbuy.tmpl",
+	"affiliate_tag": "smartbuy016-21"
   },
   {
     "name": "dealsvault",
-    "template_path": "templates/dealsvault.tmpl"
+	"template_path": "templates/dealsvault.tmpl",
+	"affiliate_tag": "dealsvault04-21"
   },
   {
     "name": "notyoffers",
-    "template_path": "templates/notyoffers.tmpl"
+    "template_path": "templates/notyoffers.tmpl",
+    "affiliate_tag": "notyoffers-21"
   }
 ]

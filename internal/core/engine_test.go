@@ -146,3 +146,122 @@ func TestGeneratePostsReturnsGenerationErrorPerAccount(t *testing.T) {
 		t.Fatalf("expected generation error, got %#v", results[0])
 	}
 }
+
+func TestGeneratePostsNormalizesAmazonURLBeforeScrape(t *testing.T) {
+	var capturedURL string
+
+	engine := Engine{
+		accounts:  []models.Account{{Name: "afficart", TemplatePath: "templates/afficart.tmpl"}},
+		selectors: config.Selectors{},
+		scraperFactory: func(url string, sel config.Selectors) (scraper.Scraper, error) {
+			capturedURL = url
+			return stubScraper{product: &models.Product{Title: "Example Product", Link: url}}, nil
+		},
+		postGenerator: func(product models.Product, path string) (string, error) {
+			return "ok", nil
+		},
+	}
+
+	messy := "https://www.amazon.in/Some-Title/dp/B0F7QR75X2?tag=abc&ref=something"
+	results, err := engine.GeneratePosts([]string{messy}, []string{"afficart"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	expected := "https://www.amazon.in/dp/B0F7QR75X2"
+	if capturedURL != expected {
+		t.Fatalf("expected normalized URL %q, got %q", expected, capturedURL)
+	}
+
+	if results[0].URL != expected {
+		t.Fatalf("expected result URL %q, got %q", expected, results[0].URL)
+	}
+}
+
+func TestGeneratePostsKeepsShortLinkUnchanged(t *testing.T) {
+	engine := Engine{
+		accounts:       []models.Account{{Name: "afficart", TemplatePath: "templates/afficart.tmpl"}},
+		selectors:      config.Selectors{},
+		scraperFactory: scraper.GetScraper,
+		postGenerator: func(product models.Product, path string) (string, error) {
+			return "", nil
+		},
+	}
+
+	shortURL := "https://amzn.in/d/xyz123"
+	results, err := engine.GeneratePosts([]string{shortURL}, []string{"afficart"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	if results[0].URL != shortURL {
+		t.Fatalf("expected unchanged short URL %q, got %q", shortURL, results[0].URL)
+	}
+}
+
+func TestGeneratePostsInjectsAffiliateTagPerAccount(t *testing.T) {
+	var generatedProduct models.Product
+
+	engine := Engine{
+		accounts: []models.Account{{
+			Name:         "zonerush",
+			TemplatePath: "templates/zonerush.tmpl",
+			AffiliateTag: "zonrushdeals-21",
+		}},
+		selectors: config.Selectors{},
+		scraperFactory: func(url string, sel config.Selectors) (scraper.Scraper, error) {
+			return stubScraper{product: &models.Product{Title: "Example Product", Link: url}}, nil
+		},
+		postGenerator: func(product models.Product, path string) (string, error) {
+			generatedProduct = product
+			return "ok", nil
+		},
+	}
+
+	_, err := engine.GeneratePosts([]string{"https://www.amazon.in/dp/B0F7QR75X2"}, []string{"zonerush"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := "https://www.amazon.in/dp/B0F7QR75X2?tag=zonrushdeals-21"
+	if generatedProduct.Link != want {
+		t.Fatalf("expected injected affiliate tag URL %q, got %q", want, generatedProduct.Link)
+	}
+}
+
+func TestGeneratePostsKeepsURLWhenAffiliateTagEmpty(t *testing.T) {
+	var generatedProduct models.Product
+
+	engine := Engine{
+		accounts: []models.Account{{
+			Name:         "afficart",
+			TemplatePath: "templates/afficart.tmpl",
+		}},
+		selectors: config.Selectors{},
+		scraperFactory: func(url string, sel config.Selectors) (scraper.Scraper, error) {
+			return stubScraper{product: &models.Product{Title: "Example Product", Link: url}}, nil
+		},
+		postGenerator: func(product models.Product, path string) (string, error) {
+			generatedProduct = product
+			return "ok", nil
+		},
+	}
+
+	_, err := engine.GeneratePosts([]string{"https://www.amazon.in/dp/B0F7QR75X2"}, []string{"afficart"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := "https://www.amazon.in/dp/B0F7QR75X2"
+	if generatedProduct.Link != want {
+		t.Fatalf("expected unchanged URL %q, got %q", want, generatedProduct.Link)
+	}
+}

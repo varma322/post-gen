@@ -132,6 +132,65 @@ button:disabled {
   gap: 10px;
 }
 
+.result-summary {
+  border: 1px solid var(--line);
+  background: #f7fbff;
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.badge {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.badge.success {
+  background: var(--accent-soft);
+  color: #14604f;
+}
+
+.badge.error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.badge.neutral {
+  background: #ecf1f7;
+  color: #334a63;
+}
+
+.url-group {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.url-head {
+  padding: 10px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  background: #f8fbfd;
+  font-size: 0.86rem;
+  flex-wrap: wrap;
+}
+
+.url-body {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+}
+
 .result-card {
   border-radius: 12px;
   border: 1px solid var(--line);

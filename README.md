@@ -83,13 +83,15 @@ If port 8080 is busy, use a different address:
 Open `http://localhost:8080/` in your browser. Includes:
 - URL textarea (one product link per line)
 - Dynamic account selection (loaded from `/accounts`)
-- Generate action backed by `POST /generate`
+- Generate action backed by `POST /generate/stream` for live progress updates
 - Per-result output/error cards with copy buttons
+- URL-wise grouped results with run summary (Success / Failed / Total)
 
 Available endpoints:
 - `GET /health`
 - `GET /accounts`
 - `POST /generate`
+- `POST /generate/stream` (SSE stream with `progress`, `result`, `done` events)
 
 Example request:
 ```json

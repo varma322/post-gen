@@ -5,8 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
+	"post-gen/internal/api"
 	"post-gen/internal/core"
 	"post-gen/internal/utils"
 	"strings"
@@ -19,22 +21,33 @@ func main() {
 	allAccounts := flag.Bool("all", false, "Generate for all accounts")
 	splitMode := flag.Bool("split", false, "Save each product to a separate file (Split mode)")
 	clearDir := flag.Bool("clear", false, "Clear output directory before starting")
+	serveMode := flag.Bool("serve", false, "Start API server mode (compatibility)")
+	addr := flag.String("addr", ":8080", "Address for HTTP API server")
 	flag.Parse()
+
+	paths := core.DefaultPaths()
+	engine, err := core.NewEngine(paths)
+	if err != nil {
+		log.Fatalf("[ERR] Bootstrapping engine: %v", err)
+	}
+
+	if *serveMode {
+		log.Printf("[INFO] Starting API server on %s", *addr)
+		if err := http.ListenAndServe(*addr, api.NewServer(engine)); err != nil {
+			log.Fatalf("[ERR] Starting API server: %v", err)
+		}
+		return
+	}
 
 	if *url == "" && *filePath == "" {
 		fmt.Println("Usage: postgen [--url <link> | --file <path>] [--account <name> | --all] [--split] [--clear]")
+		fmt.Println("       postgen --serve [--addr :8080]")
 		return
 	}
 
 	if *accountName == "" && !*allAccounts {
 		fmt.Println("Please specify --account or --all")
 		return
-	}
-
-	paths := core.DefaultPaths()
-	engine, err := core.NewEngine(paths)
-	if err != nil {
-		log.Fatalf("[ERR] Bootstrapping engine: %v", err)
 	}
 
 	if *clearDir {
