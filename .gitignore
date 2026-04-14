@@ -33,3 +33,5 @@ go.work.sum
 
 output/*
 links.txt
+newFeature.md
+plan.md

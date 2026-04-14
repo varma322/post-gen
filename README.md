@@ -9,7 +9,39 @@ A high-performance, CLI-driven tool to automate the creation of affiliate produc
 - **Fail-Safe Processing**: Retries and random delays are implemented to minimize blocking.
 - **Multi-Output System**: Supports both console and file-based outputs with configurable modes.
 
+## �️ Project Structure
+
+```
+postgen/
+├── cmd/
+│   ├── cli/          # CLI entrypoint  →  go build ./cmd/cli/
+│   └── api/          # API server      →  go build ./cmd/api/
+├── internal/
+│   ├── core/         # Reusable engine (engine.go, types.go)
+│   ├── api/          # HTTP layer (handler.go, types.go, middleware.go)
+│   ├── scraper/      # Scraper interface + Amazon impl + utils
+│   ├── generator/    # Template rendering
+│   ├── config/       # accounts.json / selectors.json loaders
+│   ├── models/       # Product, Account types
+│   └── utils/        # Shared helpers (Slugify)
+├── web/              # Browser UI (index.html, app.js, styles.css, embed.go)
+├── templates/        # Post templates (.tmpl)
+├── output/           # CLI output files
+├── accounts.json
+└── selectors.json
+```
+
 ## 🚀 Getting Started
+
+### Build
+
+```powershell
+# CLI binary
+go build -o postgen.exe ./cmd/cli/
+
+# API server binary
+go build -o postgen-api.exe ./cmd/api/
+```
 
 Ensure the folder contains the following assets:
 - `postgen.exe`: The binary.
@@ -35,6 +67,36 @@ Generate for **all** registered accounts:
 Process a list of URLs from a text file (one URL per line):
 ```powershell
 .\postgen.exe --file links.txt --all
+```
+
+#### 🌐 API Server Mode
+Start the dedicated API + browser UI binary:
+```powershell
+.\postgen-api.exe --addr :8080
+```
+
+If port 8080 is busy, use a different address:
+```powershell
+.\postgen-api.exe --addr 127.0.0.1:8090
+```
+
+Open `http://localhost:8080/` in your browser. Includes:
+- URL textarea (one product link per line)
+- Dynamic account selection (loaded from `/accounts`)
+- Generate action backed by `POST /generate`
+- Per-result output/error cards with copy buttons
+
+Available endpoints:
+- `GET /health`
+- `GET /accounts`
+- `POST /generate`
+
+Example request:
+```json
+{
+  "urls": ["https://amazon.in/..."],
+  "accounts": ["afficart", "smartbuy"]
+}
 ```
 
 #### ⚙️ Advanced Flags
