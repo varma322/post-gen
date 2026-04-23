@@ -77,8 +77,20 @@ func calculateDiscount(dealPriceStr, mrpStr string) string {
 	return ""
 }
 
+// sharedHTTPClient is a single package-level client reused across all scrape requests.
+// Reusing the client (and its underlying Transport) allows TCP connections to be pooled,
+// preventing socket exhaustion during bulk processing.
+var sharedHTTPClient = &http.Client{
+	Timeout: 15 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+	},
+}
+
 func getHttpClient() *http.Client {
-	return &http.Client{Timeout: 15 * time.Second}
+	return sharedHTTPClient
 }
 
 func getRandomUserAgent() string {

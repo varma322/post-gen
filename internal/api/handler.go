@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"post-gen/internal/core"
+	"post-gen/internal/generator"
 	"post-gen/internal/models"
 	postgenWeb "post-gen/web"
 )
@@ -335,6 +336,9 @@ func (s server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request, nam
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save template"})
 		return
 	}
+
+	// Invalidate the in-memory template cache so the next render picks up the new content.
+	generator.InvalidateCache(templatePath)
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved", "name": name})
 }
