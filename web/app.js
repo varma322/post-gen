@@ -5,6 +5,13 @@ const clearBtn = document.getElementById("clear");
 const statusEl = document.getElementById("status");
 const resultsEl = document.getElementById("results");
 const urlsEl = document.getElementById("urls");
+const templateSelectEl = document.getElementById("templateSelect");
+const reloadTemplatesBtn = document.getElementById("reloadTemplates");
+const saveTemplateBtn = document.getElementById("saveTemplate");
+const templateEditorEl = document.getElementById("templateEditor");
+const templateStatusEl = document.getElementById("templateStatus");
+
+let templatesCache = [];
 
 async function loadAccounts() {
   statusEl.textContent = "Loading accounts...";
@@ -15,6 +22,94 @@ async function loadAccounts() {
   const payload = await resp.json();
   renderAccounts(payload.accounts || []);
   statusEl.textContent = "Accounts loaded.";
+}
+
+function setTemplateStatus(text, isError) {
+  templateStatusEl.textContent = text || "";
+  templateStatusEl.classList.toggle("status-error", Boolean(isError));
+}
+
+async function loadTemplates() {
+  setTemplateStatus("Loading templates...", false);
+  const resp = await fetch("/templates");
+  if (!resp.ok) {
+    throw new Error("failed to load templates");
+  }
+
+  const payload = await resp.json();
+  templatesCache = payload.templates || [];
+
+  templateSelectEl.innerHTML = "";
+  if (templatesCache.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No templates found";
+    templateSelectEl.appendChild(option);
+    templateEditorEl.value = "";
+    setTemplateStatus("No templates available.", true);
+    return;
+  }
+
+  templatesCache.forEach((tmpl) => {
+    const option = document.createElement("option");
+    option.value = tmpl.name;
+    option.textContent = tmpl.name + (tmpl.accounts && tmpl.accounts.length > 0 ? " (" + tmpl.accounts.join(",") + ")" : "");
+    templateSelectEl.appendChild(option);
+  });
+
+  await loadSelectedTemplateContent();
+  setTemplateStatus("Templates loaded.", false);
+}
+
+async function loadSelectedTemplateContent() {
+  const name = templateSelectEl.value;
+  if (!name) {
+    templateEditorEl.value = "";
+    return;
+  }
+
+  setTemplateStatus("Loading " + name + "...", false);
+  const resp = await fetch("/templates/" + encodeURIComponent(name));
+  if (!resp.ok) {
+    const payload = await resp.json();
+    throw new Error(payload.error || "failed to load template");
+  }
+
+  const payload = await resp.json();
+  templateEditorEl.value = payload.content || "";
+  setTemplateStatus("Loaded " + name + ".", false);
+}
+
+async function saveCurrentTemplate() {
+  const name = templateSelectEl.value;
+  if (!name) {
+    setTemplateStatus("Select a template first.", true);
+    return;
+  }
+
+  saveTemplateBtn.disabled = true;
+  reloadTemplatesBtn.disabled = true;
+  setTemplateStatus("Saving " + name + "...", false);
+
+  try {
+    const resp = await fetch("/templates/" + encodeURIComponent(name), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: templateEditorEl.value })
+    });
+
+    const payload = await resp.json();
+    if (!resp.ok) {
+      throw new Error(payload.error || "failed to save template");
+    }
+
+    setTemplateStatus("Saved " + name + " successfully.", false);
+  } catch (err) {
+    setTemplateStatus("Error: " + err.message, true);
+  } finally {
+    saveTemplateBtn.disabled = false;
+    reloadTemplatesBtn.disabled = false;
+  }
 }
 
 function renderAccounts(accounts) {
@@ -204,6 +299,26 @@ clearBtn.addEventListener("click", () => {
   statusEl.textContent = "Cleared.";
 });
 
+templateSelectEl.addEventListener("change", async () => {
+  try {
+    await loadSelectedTemplateContent();
+  } catch (err) {
+    setTemplateStatus("Error: " + err.message, true);
+  }
+});
+
+reloadTemplatesBtn.addEventListener("click", async () => {
+  try {
+    await loadTemplates();
+  } catch (err) {
+    setTemplateStatus("Error: " + err.message, true);
+  }
+});
+
+saveTemplateBtn.addEventListener("click", async () => {
+  await saveCurrentTemplate();
+});
+
 generateBtn.addEventListener("click", async () => {
   const urls = parseURLs();
   if (urls.length === 0) {
@@ -284,4 +399,8 @@ generateBtn.addEventListener("click", async () => {
 
 loadAccounts().catch((err) => {
   statusEl.textContent = "Error: " + err.message;
+});
+
+loadTemplates().catch((err) => {
+  setTemplateStatus("Error: " + err.message, true);
 });

@@ -5,7 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"text/template"
+	"time"
 
 	"post-gen/internal/core"
 	"post-gen/internal/models"
@@ -14,12 +18,18 @@ import (
 
 // NewServer creates an HTTP handler exposing the generation API and web UI.
 func NewServer(engine Generator) http.Handler {
-	srv := server{engine: engine}
+	return newServer(engine, "templates")
+}
+
+func newServer(engine Generator, templatesDir string) http.Handler {
+	srv := server{engine: engine, templatesDir: templatesDir}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", srv.handleHealth)
 	mux.HandleFunc("/accounts", srv.handleAccounts)
 	mux.HandleFunc("/generate", srv.handleGenerate)
 	mux.HandleFunc("/generate/stream", srv.handleGenerateStream)
+	mux.HandleFunc("/templates", srv.handleTemplates)
+	mux.HandleFunc("/templates/", srv.handleTemplateByName)
 	mux.Handle("/", http.FileServer(http.FS(postgenWeb.FS)))
 	return mux
 }
@@ -215,4 +225,142 @@ func writeSSE(w http.ResponseWriter, event string, payload any) error {
 	}
 
 	return nil
+}
+
+func (s server) handleTemplates(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+
+	entries, err := os.ReadDir(s.templatesDir)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to read templates"})
+		return
+	}
+
+	accountsByTemplate := make(map[string][]string)
+	for _, account := range s.engine.Accounts() {
+		templateName := filepath.Base(account.TemplatePath)
+		accountsByTemplate[templateName] = append(accountsByTemplate[templateName], account.Name)
+	}
+
+	infos := make([]templateInfo, 0)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+		if filepath.Ext(name) != ".tmpl" {
+			continue
+		}
+
+		infos = append(infos, templateInfo{
+			Name:     name,
+			Path:     filepath.ToSlash(filepath.Join(s.templatesDir, name)),
+			Accounts: accountsByTemplate[name],
+		})
+	}
+
+	writeJSON(w, http.StatusOK, templatesResponse{Templates: infos})
+}
+
+func (s server) handleTemplateByName(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/templates/")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "template name is required"})
+		return
+	}
+
+	if err := validateTemplateName(name); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		s.handleGetTemplate(w, name)
+	case http.MethodPut:
+		s.handleUpdateTemplate(w, r, name)
+	default:
+		methodNotAllowed(w, http.MethodGet+", "+http.MethodPut)
+	}
+}
+
+func (s server) handleGetTemplate(w http.ResponseWriter, name string) {
+	contentPath := filepath.Join(s.templatesDir, name)
+	data, err := os.ReadFile(contentPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "template not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to read template"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, templateResponse{Name: name, Content: string(data)})
+}
+
+func (s server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request, name string) {
+	defer r.Body.Close()
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	var req updateTemplateRequest
+	if err := decoder.Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON payload"})
+		return
+	}
+
+	if strings.TrimSpace(req.Content) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "template content cannot be empty"})
+		return
+	}
+
+	if _, err := template.New(name).Parse(req.Content); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "template parse error: " + err.Error()})
+		return
+	}
+
+	templatePath := filepath.Join(s.templatesDir, name)
+	if err := backupTemplateIfExists(templatePath); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to backup existing template"})
+		return
+	}
+
+	if err := os.WriteFile(templatePath, []byte(req.Content), 0644); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save template"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "saved", "name": name})
+}
+
+func validateTemplateName(name string) error {
+	if filepath.Base(name) != name {
+		return errors.New("invalid template name")
+	}
+	if filepath.Ext(name) != ".tmpl" {
+		return errors.New("template must have .tmpl extension")
+	}
+	if strings.Contains(name, "..") {
+		return errors.New("invalid template name")
+	}
+	return nil
+}
+
+func backupTemplateIfExists(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+
+	backupPath := fmt.Sprintf("%s.bak-%s", path, time.Now().Format("20060102150405"))
+	return os.WriteFile(backupPath, data, 0644)
 }

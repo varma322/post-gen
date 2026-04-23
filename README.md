@@ -86,12 +86,16 @@ Open `http://localhost:8080/` in your browser. Includes:
 - Generate action backed by `POST /generate/stream` for live progress updates
 - Per-result output/error cards with copy buttons
 - URL-wise grouped results with run summary (Success / Failed / Total)
+- Template manager panel (list, load, edit, save)
 
 Available endpoints:
 - `GET /health`
 - `GET /accounts`
 - `POST /generate`
 - `POST /generate/stream` (SSE stream with `progress`, `result`, `done` events)
+- `GET /templates` (list `.tmpl` files + mapped accounts)
+- `GET /templates/{name}` (read template content)
+- `PUT /templates/{name}` (validate + save template, with backup)
 
 Example request:
 ```json

@@ -36,6 +36,26 @@ type streamDonePayload struct {
 	Failed       int `json:"failed"`
 }
 
+type templateInfo struct {
+	Name     string   `json:"name"`
+	Path     string   `json:"path"`
+	Accounts []string `json:"accounts"`
+}
+
+type templatesResponse struct {
+	Templates []templateInfo `json:"templates"`
+}
+
+type templateResponse struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+type updateTemplateRequest struct {
+	Content string `json:"content"`
+}
+
 type server struct {
-	engine Generator
+	engine       Generator
+	templatesDir string
 }

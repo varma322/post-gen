@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"post-gen/internal/config"
@@ -114,6 +115,27 @@ func (a *AmazonScraper) Scrape(url string) (*models.Product, error) {
 	product.DealPrice = FindFirst(doc, a.Sel.Price, cleanPrice)
 	product.MRP = FindFirst(doc, a.Sel.MRP, cleanPrice)
 
+	// Fallback title extraction for alternate page layouts.
+	if product.Title == "" {
+		product.Title = FindFirst(doc, "#title, h1#title, h1.a-size-large, title", cleanText)
+	}
+	if product.Title == "" {
+		if content, ok := doc.Find("meta[property='og:title']").First().Attr("content"); ok {
+			product.Title = cleanText(content)
+		}
+	}
+
+	// Price fallbacks for layout variants.
+	if product.DealPrice == "" {
+		product.DealPrice = FindFirst(doc, ".priceToPay .a-offscreen, .apexPriceToPay .a-offscreen, .a-price .a-offscreen", cleanPrice)
+	}
+	if product.MRP == "" {
+		product.MRP = FindFirst(doc, ".a-text-price .a-offscreen, .basisPrice .a-offscreen", cleanPrice)
+	}
+	if product.DealPrice == "" && product.MRP != "" {
+		product.DealPrice = product.MRP
+	}
+
 	// Features
 	doc.Find(a.Sel.Features).Each(func(i int, s *goquery.Selection) {
 		feature := cleanText(s.Text())
@@ -130,10 +152,41 @@ func (a *AmazonScraper) Scrape(url string) (*models.Product, error) {
 	// Logic for calculating discount
 	product.Discount = calculateDiscount(product.DealPrice, product.MRP)
 
-	// Block detection
-	if product.Title == "" || product.DealPrice == "" {
-		return nil, errors.New("failed to extract Amazon product title or price - possible layout change, block, or CAPTCHA")
+	// Block / availability detection
+	if isCaptchaPage(doc) {
+		return nil, errors.New("amazon returned CAPTCHA page; retry later or reduce request frequency")
+	}
+
+	if product.Title == "" {
+		return nil, errors.New("failed to extract Amazon product title - possible layout change, block, or CAPTCHA")
+	}
+
+	if product.DealPrice == "" {
+		if isOutOfStockPage(doc) {
+			product.DealPrice = "Out of stock"
+		} else {
+			return nil, errors.New("failed to extract Amazon product price - possible layout change, block, or CAPTCHA")
+		}
 	}
 
 	return &product, nil
+}
+
+func isOutOfStockPage(doc *goquery.Document) bool {
+	availability := cleanText(doc.Find("#availability, #outOfStock, #availabilityInsideBuyBox_feature_div, #availabilityMessage_feature_div").First().Text())
+	availability = strings.ToLower(availability)
+
+	return strings.Contains(availability, "currently unavailable") ||
+		strings.Contains(availability, "temporarily unavailable") ||
+		strings.Contains(availability, "out of stock") ||
+		strings.Contains(availability, "unavailable")
+}
+
+func isCaptchaPage(doc *goquery.Document) bool {
+	if doc.Find("form[action*='validateCaptcha'], input#captchacharacters").Length() > 0 {
+		return true
+	}
+
+	title := strings.ToLower(cleanText(doc.Find("title").First().Text()))
+	return strings.Contains(title, "enter the characters you see below") || strings.Contains(title, "captcha")
 }

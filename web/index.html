@@ -30,6 +30,19 @@
     </section>
 
     <section id="results" class="results"></section>
+
+    <section class="panel templates-panel">
+      <div class="templates-head">
+        <h2>Template Manager</h2>
+        <div class="templates-controls">
+          <select id="templateSelect"></select>
+          <button id="reloadTemplates" class="secondary" type="button">Reload</button>
+          <button id="saveTemplate" class="primary" type="button">Save Template</button>
+        </div>
+      </div>
+      <textarea id="templateEditor" class="template-editor" placeholder="Select a template to edit..."></textarea>
+      <div id="templateStatus" class="status"></div>
+    </section>
   </main>
 
   <script src="/app.js"></script>

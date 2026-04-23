@@ -147,7 +147,7 @@ func TestGeneratePostsReturnsGenerationErrorPerAccount(t *testing.T) {
 	}
 }
 
-func TestGeneratePostsNormalizesAmazonURLBeforeScrape(t *testing.T) {
+func TestGeneratePostsKeepsFullAmazonURLBeforeScrape(t *testing.T) {
 	var capturedURL string
 
 	engine := Engine{
@@ -172,9 +172,9 @@ func TestGeneratePostsNormalizesAmazonURLBeforeScrape(t *testing.T) {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
 
-	expected := "https://www.amazon.in/dp/B0F7QR75X2"
+	expected := messy
 	if capturedURL != expected {
-		t.Fatalf("expected normalized URL %q, got %q", expected, capturedURL)
+		t.Fatalf("expected full URL %q, got %q", expected, capturedURL)
 	}
 
 	if results[0].URL != expected {
