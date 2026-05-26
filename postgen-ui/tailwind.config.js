@@ -1,0 +1,68 @@
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: [
+    "./index.html",
+    "./src/**/*.{js,ts,jsx,tsx}",
+  ],
+  darkMode: "class",
+  theme: {
+    extend: {
+      "colors": {
+        "surface-dim": "#0e1511",
+        "primary-fixed-dim": "#4edea3",
+        "on-surface-variant": "#bbcabf",
+        "on-error": "#690005",
+        "on-secondary-fixed-variant": "#0b513d",
+        "tertiary-container": "#fc7c78",
+        "primary": "#4edea3",
+        "surface-tint": "#4edea3",
+        "inverse-on-surface": "#2b322d",
+        "secondary-fixed": "#b0f0d6",
+        "error": "#ffb4ab",
+        "on-surface": "#dde4dd",
+        "on-secondary": "#003829",
+        "surface-container-lowest": "#09100c",
+        "surface-container-low": "#161d19",
+        "secondary-container": "#0b513d",
+        "on-primary": "#003824",
+        "outline-variant": "#3c4a42",
+        "on-secondary-container": "#83c2a9",
+        "surface-variant": "#2f3632",
+        "background": "#0e1511",
+        "on-tertiary-fixed-variant": "#842225",
+        "surface-container": "#1a211d",
+        "surface": "#0e1511",
+        "secondary": "#95d3ba",
+        "surface-bright": "#343b36",
+        "tertiary-fixed": "#ffdad7",
+        "tertiary-fixed-dim": "#ffb3af",
+        "primary-container": "#10b981",
+        "on-tertiary-fixed": "#410005",
+        "on-tertiary-container": "#711419",
+        "on-error-container": "#ffdad6",
+        "tertiary": "#ffb3af",
+        "on-secondary-fixed": "#002117",
+        "surface-container-highest": "#2f3632",
+        "outline": "#86948a",
+        "primary-fixed": "#6ffbbe",
+        "on-primary-container": "#00422b",
+        "inverse-surface": "#dde4dd",
+        "inverse-primary": "#006c49",
+        "on-primary-fixed": "#002113",
+        "on-tertiary": "#650911",
+        "secondary-fixed-dim": "#95d3ba",
+        "on-background": "#dde4dd",
+        "on-primary-fixed-variant": "#005236",
+        "error-container": "#93000a",
+        "surface-container-high": "#242c27"
+      },
+      "fontFamily": {
+        "headline": ["Inter"],
+        "display": ["Inter"],
+        "body": ["Inter"],
+        "label": ["Public Sans"]
+      }
+    }
+  },
+  plugins: [],
+}
