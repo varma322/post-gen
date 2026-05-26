@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"post-gen/internal/core"
 	"post-gen/internal/models"
@@ -29,6 +30,13 @@ func (s stubGenerator) GeneratePosts(urls []string, accountNames []string) ([]co
 	return s.results, s.err
 }
 
+func (s stubGenerator) GeneratePostsWithPublish(urls []string, accountNames []string, publish bool, delayBetweenPosts time.Duration) ([]core.Result, error) {
+	if s.generateFunc != nil {
+		return s.generateFunc(urls, accountNames)
+	}
+	return s.results, s.err
+}
+
 func (s stubGenerator) Accounts() []models.Account {
 	return s.accounts
 }
@@ -36,7 +44,7 @@ func (s stubGenerator) Accounts() []models.Account {
 func TestHandleGenerateReturnsResults(t *testing.T) {
 	handler := NewServer(stubGenerator{
 		results: []core.Result{{URL: "https://amazon.in/example", Account: "afficart", Output: "generated post"}},
-	})
+	}, "")
 
 	body := bytes.NewBufferString(`{"urls":["https://amazon.in/example"],"accounts":["afficart"]}`)
 	req := httptest.NewRequest(http.MethodPost, "/generate", body)
@@ -59,7 +67,7 @@ func TestHandleGenerateReturnsResults(t *testing.T) {
 }
 
 func TestHandleGenerateRejectsMalformedJSON(t *testing.T) {
-	handler := NewServer(stubGenerator{})
+	handler := NewServer(stubGenerator{}, "")
 	req := httptest.NewRequest(http.MethodPost, "/generate", bytes.NewBufferString(`{"urls":`))
 	resp := httptest.NewRecorder()
 
@@ -71,7 +79,7 @@ func TestHandleGenerateRejectsMalformedJSON(t *testing.T) {
 }
 
 func TestHandleGenerateRejectsEmptyURLs(t *testing.T) {
-	handler := NewServer(stubGenerator{})
+	handler := NewServer(stubGenerator{}, "")
 	req := httptest.NewRequest(http.MethodPost, "/generate", bytes.NewBufferString(`{"urls":[],"accounts":["afficart"]}`))
 	resp := httptest.NewRecorder()
 
@@ -83,7 +91,7 @@ func TestHandleGenerateRejectsEmptyURLs(t *testing.T) {
 }
 
 func TestHandleGenerateMapsAccountErrorsToBadRequest(t *testing.T) {
-	handler := NewServer(stubGenerator{err: core.AccountNotFoundError{Name: "missing"}})
+	handler := NewServer(stubGenerator{err: core.AccountNotFoundError{Name: "missing"}}, "")
 	req := httptest.NewRequest(http.MethodPost, "/generate", bytes.NewBufferString(`{"urls":["https://amazon.in/example"],"accounts":["missing"]}`))
 	resp := httptest.NewRecorder()
 
@@ -95,7 +103,7 @@ func TestHandleGenerateMapsAccountErrorsToBadRequest(t *testing.T) {
 }
 
 func TestHandleGenerateMapsUnexpectedErrorsToServerError(t *testing.T) {
-	handler := NewServer(stubGenerator{err: errors.New("boom")})
+	handler := NewServer(stubGenerator{err: errors.New("boom")}, "")
 	req := httptest.NewRequest(http.MethodPost, "/generate", bytes.NewBufferString(`{"urls":["https://amazon.in/example"]}`))
 	resp := httptest.NewRecorder()
 
@@ -112,7 +120,7 @@ func TestHandleGenerateReturnsMixedBatchResults(t *testing.T) {
 			{URL: "https://amazon.in/ok", Account: "afficart", Output: "generated post"},
 			{URL: "https://amazon.in/fail", Account: "afficart", Error: "failed to extract title"},
 		},
-	})
+	}, "")
 
 	body := bytes.NewBufferString(`{"urls":["https://amazon.in/ok","https://amazon.in/fail"],"accounts":["afficart"]}`)
 	req := httptest.NewRequest(http.MethodPost, "/generate", body)
@@ -143,7 +151,7 @@ func TestHandleGenerateReturnsMixedBatchResults(t *testing.T) {
 }
 
 func TestHandleGenerateMethodNotAllowed(t *testing.T) {
-	handler := NewServer(stubGenerator{})
+	handler := NewServer(stubGenerator{}, "")
 	req := httptest.NewRequest(http.MethodGet, "/generate", nil)
 	resp := httptest.NewRecorder()
 
@@ -159,7 +167,7 @@ func TestHandleGenerateMethodNotAllowed(t *testing.T) {
 }
 
 func TestHandleGenerateStreamRejectsMalformedJSON(t *testing.T) {
-	handler := NewServer(stubGenerator{})
+	handler := NewServer(stubGenerator{}, "")
 	req := httptest.NewRequest(http.MethodPost, "/generate/stream", bytes.NewBufferString(`{"urls":`))
 	resp := httptest.NewRecorder()
 
@@ -180,7 +188,7 @@ func TestHandleGenerateStreamReturnsEvents(t *testing.T) {
 				Output:  "generated",
 			}}, nil
 		},
-	})
+	}, "")
 
 	body := bytes.NewBufferString(`{"urls":["https://amazon.in/p1","https://amazon.in/p2"],"accounts":["afficart"]}`)
 	req := httptest.NewRequest(http.MethodPost, "/generate/stream", body)
@@ -210,7 +218,7 @@ func TestHandleGenerateStreamReturnsEvents(t *testing.T) {
 }
 
 func TestHandleAccountsReturnsConfiguredAccounts(t *testing.T) {
-	handler := NewServer(stubGenerator{accounts: []models.Account{{Name: "afficart", TemplatePath: "templates/afficart.tmpl"}}})
+	handler := NewServer(stubGenerator{accounts: []models.Account{{Name: "afficart", TemplatePath: "templates/afficart.tmpl"}}}, "")
 	req := httptest.NewRequest(http.MethodGet, "/accounts", nil)
 	resp := httptest.NewRecorder()
 
@@ -231,7 +239,7 @@ func TestHandleAccountsReturnsConfiguredAccounts(t *testing.T) {
 }
 
 func TestHandleHomeReturnsHTML(t *testing.T) {
-	handler := NewServer(stubGenerator{})
+	handler := NewServer(stubGenerator{}, "")
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	resp := httptest.NewRecorder()
 
@@ -252,7 +260,7 @@ func TestHandleHomeReturnsHTML(t *testing.T) {
 }
 
 func TestHandleHomeMissingFileReturns404(t *testing.T) {
-	handler := NewServer(stubGenerator{})
+	handler := NewServer(stubGenerator{}, "")
 	req := httptest.NewRequest(http.MethodGet, "/does-not-exist.txt", nil)
 	resp := httptest.NewRecorder()
 
@@ -272,7 +280,7 @@ func TestHandleTemplatesListReturnsTemplateInfo(t *testing.T) {
 	handler := newServer(stubGenerator{accounts: []models.Account{{
 		Name:         "afficart",
 		TemplatePath: "templates/afficart.tmpl",
-	}}}, templatesDir)
+	}}}, templatesDir, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/templates", nil)
 	resp := httptest.NewRecorder()
@@ -306,7 +314,7 @@ func TestHandleTemplateGetReturnsContent(t *testing.T) {
 		t.Fatalf("failed to write template: %v", err)
 	}
 
-	handler := newServer(stubGenerator{}, templatesDir)
+	handler := newServer(stubGenerator{}, templatesDir, "")
 	req := httptest.NewRequest(http.MethodGet, "/templates/sample.tmpl", nil)
 	resp := httptest.NewRecorder()
 	handler.ServeHTTP(resp, req)
@@ -336,7 +344,7 @@ func TestHandleTemplatePutSavesAndCreatesBackup(t *testing.T) {
 		t.Fatalf("failed to write original template: %v", err)
 	}
 
-	handler := newServer(stubGenerator{}, templatesDir)
+	handler := newServer(stubGenerator{}, templatesDir, "")
 	body := bytes.NewBufferString(`{"content":"new {{.Title}}"}`)
 	req := httptest.NewRequest(http.MethodPut, "/templates/sample.tmpl", body)
 	resp := httptest.NewRecorder()
@@ -374,7 +382,7 @@ func TestHandleTemplatePutSavesAndCreatesBackup(t *testing.T) {
 
 func TestHandleTemplatePutRejectsInvalidTemplateSyntax(t *testing.T) {
 	templatesDir := t.TempDir()
-	handler := newServer(stubGenerator{}, templatesDir)
+	handler := newServer(stubGenerator{}, templatesDir, "")
 	body := bytes.NewBufferString(`{"content":"{{if .Title}}"}`)
 	req := httptest.NewRequest(http.MethodPut, "/templates/sample.tmpl", body)
 	resp := httptest.NewRecorder()
@@ -386,12 +394,76 @@ func TestHandleTemplatePutRejectsInvalidTemplateSyntax(t *testing.T) {
 }
 
 func TestHandleTemplateRejectsPathTraversal(t *testing.T) {
-	handler := newServer(stubGenerator{}, t.TempDir())
+	handler := newServer(stubGenerator{}, t.TempDir(), "")
 	req := httptest.NewRequest(http.MethodGet, "/templates/%2e%2e%2fsecrets.tmpl", nil)
 	resp := httptest.NewRecorder()
 	handler.ServeHTTP(resp, req)
 
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d", resp.Code)
+	}
+}
+
+// --- Auth-specific tests ---
+
+func TestBearerTokenMiddlewareBlocksUnauthenticatedRequests(t *testing.T) {
+	handler := NewServer(stubGenerator{}, "secret-token")
+	req := httptest.NewRequest(http.MethodGet, "/accounts", nil)
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d", resp.Code)
+	}
+}
+
+func TestBearerTokenMiddlewareAllowsCorrectToken(t *testing.T) {
+	handler := NewServer(stubGenerator{accounts: []models.Account{{Name: "afficart"}}}, "secret-token")
+	req := httptest.NewRequest(http.MethodGet, "/accounts", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", resp.Code)
+	}
+}
+
+func TestBearerTokenMiddlewareRejectsWrongToken(t *testing.T) {
+	handler := NewServer(stubGenerator{}, "secret-token")
+	req := httptest.NewRequest(http.MethodGet, "/accounts", nil)
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d", resp.Code)
+	}
+}
+
+func TestBearerTokenMiddlewareSkipsHealthEndpoint(t *testing.T) {
+	handler := NewServer(stubGenerator{}, "secret-token")
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected /health to be accessible without token, got %d", resp.Code)
+	}
+}
+
+func TestBearerTokenMiddlewareDisabledWhenTokenEmpty(t *testing.T) {
+	handler := NewServer(stubGenerator{accounts: []models.Account{{Name: "afficart"}}}, "")
+	req := httptest.NewRequest(http.MethodGet, "/accounts", nil)
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected auth disabled (no token), got %d", resp.Code)
 	}
 }

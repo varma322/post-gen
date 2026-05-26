@@ -28,6 +28,8 @@ type Result struct {
 	Account      string         `json:"account"`
 	Output       string         `json:"output"`
 	Error        string         `json:"error"`
+	PublishID    string         `json:"publish_id,omitempty"`
+	PublishError string         `json:"publish_error,omitempty"`
 	ProductTitle string         `json:"-"`
 	Product      models.Product `json:"-"`
 }

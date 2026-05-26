@@ -1,0 +1,12 @@
+[
+  {
+    "name": "account1",
+	"template_path": "templates/account1.tmpl",
+	"affiliate_tag": "account1-21"
+  },
+  {
+    "name": "account2",
+	"template_path": "templates/account2.tmpl",
+	"affiliate_tag": "account2-21"
+  }
+]

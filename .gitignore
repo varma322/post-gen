@@ -35,3 +35,10 @@ output/*
 links.txt
 newFeature.md
 plan.md
+accounts.json.bak-*
+*.exe
+postgen-ui/
+web/
+token.json
+stitch_ui.html
+accounts.json

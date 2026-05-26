@@ -11,6 +11,7 @@ import (
 	"text/template"
 	"time"
 
+	"post-gen/internal/config"
 	"post-gen/internal/core"
 	"post-gen/internal/generator"
 	"post-gen/internal/models"
@@ -18,21 +19,28 @@ import (
 )
 
 // NewServer creates an HTTP handler exposing the generation API and web UI.
-func NewServer(engine Generator) http.Handler {
-	return newServer(engine, "templates")
+// token is the required Bearer token for all protected endpoints.
+// Pass an empty string to disable authentication (development only).
+func NewServer(engine Generator, token string) http.Handler {
+	return newServer(engine, "templates", token)
 }
 
-func newServer(engine Generator, templatesDir string) http.Handler {
+func newServer(engine Generator, templatesDir string, token string) http.Handler {
 	srv := server{engine: engine, templatesDir: templatesDir}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", srv.handleHealth)
 	mux.HandleFunc("/accounts", srv.handleAccounts)
+	mux.HandleFunc("/accounts/", srv.handleAccountByName)
 	mux.HandleFunc("/generate", srv.handleGenerate)
 	mux.HandleFunc("/generate/stream", srv.handleGenerateStream)
 	mux.HandleFunc("/templates", srv.handleTemplates)
 	mux.HandleFunc("/templates/", srv.handleTemplateByName)
 	mux.Handle("/", http.FileServer(http.FS(postgenWeb.FS)))
-	return mux
+
+	// Protect all routes except /health and static frontend files with Bearer token auth.
+	// This allows the Web UI to load so the user can enter their token.
+	skipPaths := []string{"/health", "/", "/index.html", "/app.js", "/styles.css"}
+	return BearerTokenMiddleware(token, skipPaths, mux)
 }
 
 func (s server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -45,12 +53,146 @@ func (s server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s server) handleAccounts(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w, http.MethodGet)
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{"accounts": s.engine.Accounts()})
+	case http.MethodPost:
+		s.handleCreateAccount(w, r)
+	default:
+		methodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
+	}
+}
+
+func (s server) handleAccountByName(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/accounts/")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account name is required"})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"accounts": s.engine.Accounts()})
+	switch r.Method {
+	case http.MethodPut:
+		s.handleUpdateAccount(w, r, name)
+	case http.MethodDelete:
+		s.handleDeleteAccount(w, name)
+	default:
+		methodNotAllowed(w, http.MethodPut+", "+http.MethodDelete)
+	}
+}
+
+func (s server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	var req accountRequest
+	if err := decoder.Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON payload"})
+		return
+	}
+
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account name is required"})
+		return
+	}
+
+	accounts := s.engine.Accounts()
+	for _, acc := range accounts {
+		if acc.Name == req.Name {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "account already exists"})
+			return
+		}
+	}
+
+	newAcc := models.Account{
+		Name:                req.Name,
+		TemplatePath:        req.TemplatePath,
+		AffiliateTag:        req.AffiliateTag,
+		FacebookPageID:      req.FacebookPageID,
+		FacebookAccessToken: req.FacebookAccessToken,
+	}
+
+	accounts = append(accounts, newAcc)
+	if err := s.saveAndReloadAccounts(accounts); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{"status": "created", "name": req.Name})
+}
+
+func (s server) handleUpdateAccount(w http.ResponseWriter, r *http.Request, name string) {
+	defer r.Body.Close()
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	var req accountRequest
+	if err := decoder.Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON payload"})
+		return
+	}
+
+	accounts := s.engine.Accounts()
+	found := false
+	for i, acc := range accounts {
+		if acc.Name == name {
+			accounts[i] = models.Account{
+				Name:                name,
+				TemplatePath:        req.TemplatePath,
+				AffiliateTag:        req.AffiliateTag,
+				FacebookPageID:      req.FacebookPageID,
+				FacebookAccessToken: req.FacebookAccessToken,
+			}
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "account not found"})
+		return
+	}
+
+	if err := s.saveAndReloadAccounts(accounts); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated", "name": name})
+}
+
+func (s server) handleDeleteAccount(w http.ResponseWriter, name string) {
+	accounts := s.engine.Accounts()
+	filtered := make([]models.Account, 0, len(accounts))
+	found := false
+
+	for _, acc := range accounts {
+		if acc.Name == name {
+			found = true
+			continue
+		}
+		filtered = append(filtered, acc)
+	}
+
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "account not found"})
+		return
+	}
+
+	if err := s.saveAndReloadAccounts(filtered); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (s server) saveAndReloadAccounts(accounts []models.Account) error {
+	if err := config.SaveAccounts(s.engine.Paths().AccountsPath, accounts); err != nil {
+		return err
+	}
+	return s.engine.ReloadAccounts()
 }
 
 func (s server) handleGenerate(w http.ResponseWriter, r *http.Request) {
@@ -77,7 +219,7 @@ func (s server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	accounts := normalizeValues(req.Accounts)
-	results, err := s.engine.GeneratePosts(urls, accounts)
+	results, err := s.engine.GeneratePostsWithPublish(urls, accounts, req.Publish, time.Duration(req.PublishDelayMinutes)*time.Minute, nil)
 	if err != nil {
 		var accountErr core.AccountNotFoundError
 		if errors.As(err, &accountErr) {
@@ -135,6 +277,7 @@ func (s server) handleGenerateStream(w http.ResponseWriter, r *http.Request) {
 	totalResults := 0
 	successCount := 0
 	failureCount := 0
+	publishedCount := 0
 	totalURLs := len(urls)
 
 	for index, rawURL := range urls {
@@ -143,7 +286,18 @@ func (s server) handleGenerateStream(w http.ResponseWriter, r *http.Request) {
 		}
 		flusher.Flush()
 
-		results, err := s.engine.GeneratePosts([]string{rawURL}, accounts)
+		// Enforce inter-URL delay if we already published something in a previous iteration
+		if req.Publish && publishedCount > 0 && req.PublishDelayMinutes > 0 {
+			delay := time.Duration(req.PublishDelayMinutes) * time.Minute
+			_ = writeSSE(w, "cooldown", map[string]int{"duration_seconds": int(delay.Seconds())})
+			flusher.Flush()
+			time.Sleep(delay)
+		}
+
+		results, err := s.engine.GeneratePostsWithPublish([]string{rawURL}, accounts, req.Publish, time.Duration(req.PublishDelayMinutes)*time.Minute, func(d time.Duration) {
+			_ = writeSSE(w, "cooldown", map[string]int{"duration_seconds": int(d.Seconds())})
+			flusher.Flush()
+		})
 		if err != nil {
 			if writeErr := writeSSE(w, "error", map[string]string{"error": "failed to generate posts"}); writeErr != nil {
 				return
@@ -158,6 +312,10 @@ func (s server) handleGenerateStream(w http.ResponseWriter, r *http.Request) {
 				successCount++
 			} else {
 				failureCount++
+			}
+
+			if result.PublishID != "" {
+				publishedCount++
 			}
 
 			if err := writeSSE(w, "result", streamResultPayload{Result: result}); err != nil {

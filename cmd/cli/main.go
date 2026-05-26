@@ -12,6 +12,7 @@ import (
 	"post-gen/internal/core"
 	"post-gen/internal/utils"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -23,7 +24,16 @@ func main() {
 	clearDir := flag.Bool("clear", false, "Clear output directory before starting")
 	serveMode := flag.Bool("serve", false, "Start API server mode (compatibility)")
 	addr := flag.String("addr", ":8080", "Address for HTTP API server")
+	apiToken := flag.String("api-token", "", "Bearer token for API authentication (overrides POSTGEN_API_TOKEN env var)")
+	publish := flag.Bool("publish", false, "Publish generated posts directly to Facebook Pages (configured in accounts.json)")
+	publishDelay := flag.Duration("publish-delay", 15*time.Minute, "Delay spacing duration between consecutive Facebook publications to prevent spam blocks (e.g. 15m)")
 	flag.Parse()
+
+	// Resolve token: flag takes priority, then env variable
+	token := strings.TrimSpace(*apiToken)
+	if token == "" {
+		token = strings.TrimSpace(os.Getenv("POSTGEN_API_TOKEN"))
+	}
 
 	paths := core.DefaultPaths()
 	engine, err := core.NewEngine(paths)
@@ -32,15 +42,20 @@ func main() {
 	}
 
 	if *serveMode {
+		if token == "" {
+			log.Println("[WARN] API server started WITHOUT authentication. Set --api-token or POSTGEN_API_TOKEN env var to secure it.")
+		} else {
+			log.Println("[INFO] API authentication enabled (Bearer token).")
+		}
 		log.Printf("[INFO] Starting API server on %s", *addr)
-		if err := http.ListenAndServe(*addr, api.NewServer(engine)); err != nil {
+		if err := http.ListenAndServe(*addr, api.NewServer(engine, token)); err != nil {
 			log.Fatalf("[ERR] Starting API server: %v", err)
 		}
 		return
 	}
 
 	if *url == "" && *filePath == "" {
-		fmt.Println("Usage: postgen [--url <link> | --file <path>] [--account <name> | --all] [--split] [--clear]")
+		fmt.Println("Usage: postgen [--url <link> | --file <path>] [--account <name> | --all] [--split] [--clear] [--publish] [--publish-delay <duration>]")
 		fmt.Println("       postgen --serve [--addr :8080]")
 		return
 	}
@@ -71,7 +86,9 @@ func main() {
 		accountNames = []string{*accountName}
 	}
 
-	results, err := engine.GeneratePosts(urls, accountNames)
+	results, err := engine.GeneratePostsWithPublish(urls, accountNames, *publish, *publishDelay, func(d time.Duration) {
+		log.Printf("[INFO] Waiting %v before next publish to prevent rate limiting...", d)
+	})
 	if err != nil {
 		log.Fatalf("[ERR] Generating posts: %v", err)
 	}
@@ -116,6 +133,12 @@ func logResults(results []core.Result, totalURLs int, outputDir string, split bo
 
 		if err := writeResult(outputDir, result, split); err != nil {
 			log.Printf("[ERR] Writing output file for %s: %v", result.Account, err)
+		}
+
+		if result.PublishID != "" {
+			log.Printf("[INFO] [%s] [%s] Published to Facebook! Post ID: %s", result.URL, result.Account, result.PublishID)
+		} else if result.PublishError != "" {
+			log.Printf("[ERR] [%s] [%s] Facebook publish failed: %s", result.URL, result.Account, result.PublishError)
 		}
 	}
 }

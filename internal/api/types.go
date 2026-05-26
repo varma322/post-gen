@@ -3,21 +3,35 @@ package api
 import (
 	"post-gen/internal/core"
 	"post-gen/internal/models"
+	"time"
 )
 
 // Generator describes the core capabilities required by the HTTP layer.
 type Generator interface {
 	GeneratePosts(urls []string, accountNames []string) ([]core.Result, error)
+	GeneratePostsWithPublish(urls []string, accountNames []string, publish bool, delayBetweenPosts time.Duration, onCooldown func(time.Duration)) ([]core.Result, error)
 	Accounts() []models.Account
+	ReloadAccounts() error
+	Paths() core.Paths
 }
 
 type generateRequest struct {
-	URLs     []string `json:"urls"`
-	Accounts []string `json:"accounts"`
+	URLs                []string `json:"urls"`
+	Accounts            []string `json:"accounts"`
+	Publish             bool     `json:"publish"`
+	PublishDelayMinutes int      `json:"publish_delay_minutes"`
 }
 
 type generateResponse struct {
 	Results []core.Result `json:"results"`
+}
+
+type accountRequest struct {
+	Name                string `json:"name"`
+	TemplatePath        string `json:"template_path"`
+	AffiliateTag        string `json:"affiliate_tag"`
+	FacebookPageID      string `json:"facebook_page_id"`
+	FacebookAccessToken string `json:"facebook_access_token"`
 }
 
 type streamProgressPayload struct {

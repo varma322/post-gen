@@ -5,8 +5,10 @@ import (
 	"post-gen/internal/config"
 	"post-gen/internal/generator"
 	"post-gen/internal/models"
+	"post-gen/internal/publisher"
 	"post-gen/internal/scraper"
 	"post-gen/internal/utils"
+	"time"
 )
 
 const (
@@ -21,6 +23,7 @@ type Engine struct {
 	paths          Paths
 	scraperFactory func(string, config.Selectors) (scraper.Scraper, error)
 	postGenerator  func(models.Product, string) (string, error)
+	fbPublisher    *publisher.FacebookPublisher
 }
 
 // NewEngine loads the required configuration files and prepares an Engine.
@@ -41,6 +44,7 @@ func NewEngine(paths Paths) (*Engine, error) {
 		paths:          paths,
 		scraperFactory: scraper.GetScraper,
 		postGenerator:  generator.GeneratePost,
+		fbPublisher:    publisher.NewFacebookPublisher(),
 	}, nil
 }
 
@@ -56,15 +60,33 @@ func (e *Engine) Paths() Paths {
 	return e.paths
 }
 
+// ReloadAccounts re-reads the accounts from accounts.json and updates the engine in-place.
+func (e *Engine) ReloadAccounts() error {
+	accounts, err := config.LoadAccounts(e.paths.AccountsPath)
+	if err != nil {
+		return fmt.Errorf("reloading accounts: %w", err)
+	}
+	e.accounts = accounts
+	return nil
+}
+
 // GeneratePosts processes each URL for the requested accounts.
 // If accountNames is empty, all configured accounts are used.
 func (e *Engine) GeneratePosts(urls []string, accountNames []string) ([]Result, error) {
+	return e.GeneratePostsWithPublish(urls, accountNames, false, 0, nil)
+}
+
+// GeneratePostsWithPublish processes each URL, generates posts, and optionally publishes them to Facebook Pages.
+// If accountNames is empty, all configured accounts are used.
+func (e *Engine) GeneratePostsWithPublish(urls []string, accountNames []string, publish bool, delayBetweenPosts time.Duration, onCooldown func(time.Duration)) ([]Result, error) {
 	targetAccounts, err := e.resolveAccounts(accountNames)
 	if err != nil {
 		return nil, err
 	}
 
 	results := make([]Result, 0, len(urls)*len(targetAccounts))
+	publishCount := 0
+
 	for _, rawURL := range urls {
 		url := utils.NormalizeURL(rawURL)
 		if !scraper.IsValidURL(url) {
@@ -97,7 +119,8 @@ func (e *Engine) GeneratePosts(urls []string, accountNames []string) ([]Result, 
 
 		for _, account := range targetAccounts {
 			productForAccount := *product
-			productForAccount.Link = utils.AddAffiliateTag(url, account.AffiliateTag)
+			affiliateLink := utils.AddAffiliateTag(url, account.AffiliateTag)
+			productForAccount.Link = affiliateLink
 
 			post, err := e.postGenerator(productForAccount, account.TemplatePath)
 			result := Result{
@@ -110,7 +133,35 @@ func (e *Engine) GeneratePosts(urls []string, accountNames []string) ([]Result, 
 			if err != nil {
 				result.Output = ""
 				result.Error = fmt.Sprintf("generating post for %s: %v", account.Name, err)
+				results = append(results, result)
+				continue
 			}
+
+			// Core Facebook publishing integration
+			if publish && account.FacebookPageID != "" && account.FacebookAccessToken != "" {
+				// Enforce rate-limiting spacing delay for successive publishes in a bulk batch
+				if publishCount > 0 && delayBetweenPosts > 0 {
+					if onCooldown != nil {
+						onCooldown(delayBetweenPosts)
+					}
+					time.Sleep(delayBetweenPosts)
+				}
+
+				pubID, pubErr := e.fbPublisher.PublishPagePost(
+					account.FacebookPageID,
+					account.FacebookAccessToken,
+					post,
+					affiliateLink,
+				)
+
+				if pubErr != nil {
+					result.PublishError = pubErr.Error()
+				} else {
+					result.PublishID = pubID
+					publishCount++
+				}
+			}
+
 			results = append(results, result)
 		}
 	}

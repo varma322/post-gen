@@ -2,11 +2,14 @@ package core
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"post-gen/internal/config"
 	"post-gen/internal/models"
+	"post-gen/internal/publisher"
 	"post-gen/internal/scraper"
 )
 
@@ -263,5 +266,50 @@ func TestGeneratePostsKeepsURLWhenAffiliateTagEmpty(t *testing.T) {
 	want := "https://www.amazon.in/dp/B0F7QR75X2"
 	if generatedProduct.Link != want {
 		t.Fatalf("expected unchanged URL %q, got %q", want, generatedProduct.Link)
+	}
+}
+
+func TestGeneratePostsWithPublishSendsPost(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"fb_post_id"}`))
+	}))
+	defer server.Close()
+
+	fbPub := publisher.NewFacebookPublisher()
+	fbPub.BaseURL = server.URL
+
+	engine := Engine{
+		accounts: []models.Account{{
+			Name:                "afficart",
+			TemplatePath:        "templates/afficart.tmpl",
+			FacebookPageID:      "123",
+			FacebookAccessToken: "token",
+		}},
+		selectors: config.Selectors{},
+		scraperFactory: func(url string, sel config.Selectors) (scraper.Scraper, error) {
+			return stubScraper{product: &models.Product{Title: "Example", Link: url}}, nil
+		},
+		postGenerator: func(product models.Product, path string) (string, error) {
+			return "rendered output", nil
+		},
+		fbPublisher: fbPub,
+	}
+
+	results, err := engine.GeneratePostsWithPublish([]string{"https://amazon.in/dp/B0F7QR75X2"}, []string{"afficart"}, true, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	if results[0].PublishID != "fb_post_id" {
+		t.Fatalf("expected publish ID 'fb_post_id', got '%s'", results[0].PublishID)
+	}
+
+	if results[0].PublishError != "" {
+		t.Fatalf("unexpected publish error: %s", results[0].PublishError)
 	}
 }
