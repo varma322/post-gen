@@ -23,8 +23,8 @@ func NewFacebookPublisher() *FacebookPublisher {
 	}
 }
 
-// PublishPagePost publishes a text post and associated affiliate link directly to a Facebook Page feed.
-func (f *FacebookPublisher) PublishPagePost(pageID, token, message, link string) (string, error) {
+// PublishPagePost publishes a text post directly to a Facebook Page feed.
+func (f *FacebookPublisher) PublishPagePost(pageID, token, message string) (string, error) {
 	if pageID == "" || token == "" {
 		return "", fmt.Errorf("missing facebook_page_id or facebook_access_token")
 	}
@@ -34,7 +34,6 @@ func (f *FacebookPublisher) PublishPagePost(pageID, token, message, link string)
 	// Send parameters using standard form-urlencoded payload
 	data := url.Values{}
 	data.Set("message", message)
-	data.Set("link", link)
 	data.Set("access_token", token)
 
 	resp, err := f.Client.PostForm(apiURL, data)

@@ -151,7 +151,6 @@ func (e *Engine) GeneratePostsWithPublish(urls []string, accountNames []string, 
 					account.FacebookPageID,
 					account.FacebookAccessToken,
 					post,
-					affiliateLink,
 				)
 
 				if pubErr != nil {

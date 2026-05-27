@@ -24,8 +24,8 @@ func TestPublishPagePostSuccess(t *testing.T) {
 		if r.Form.Get("message") != "cool deal!" {
 			t.Fatalf("expected message 'cool deal!', got '%s'", r.Form.Get("message"))
 		}
-		if r.Form.Get("link") != "https://amzn.to/example" {
-			t.Fatalf("expected link 'https://amzn.to/example', got '%s'", r.Form.Get("link"))
+		if r.Form.Get("link") != "" {
+			t.Fatalf("expected no link parameter, got '%s'", r.Form.Get("link"))
 		}
 		if r.Form.Get("access_token") != "token123" {
 			t.Fatalf("expected token 'token123', got '%s'", r.Form.Get("access_token"))
@@ -39,7 +39,7 @@ func TestPublishPagePostSuccess(t *testing.T) {
 	pub := NewFacebookPublisher()
 	pub.BaseURL = server.URL
 
-	postID, err := pub.PublishPagePost("12345", "token123", "cool deal!", "https://amzn.to/example")
+	postID, err := pub.PublishPagePost("12345", "token123", "cool deal!")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestPublishPagePostApiError(t *testing.T) {
 	pub := NewFacebookPublisher()
 	pub.BaseURL = server.URL
 
-	_, err := pub.PublishPagePost("12345", "badtoken", "cool deal!", "https://amzn.to/example")
+	_, err := pub.PublishPagePost("12345", "badtoken", "cool deal!")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -74,7 +74,7 @@ func TestPublishPagePostApiError(t *testing.T) {
 
 func TestPublishPagePostMissingParams(t *testing.T) {
 	pub := NewFacebookPublisher()
-	_, err := pub.PublishPagePost("", "token", "msg", "link")
+	_, err := pub.PublishPagePost("", "token", "msg")
 	if err == nil || !strings.Contains(err.Error(), "missing facebook_page_id") {
 		t.Fatalf("expected missing params error, got: %v", err)
 	}
