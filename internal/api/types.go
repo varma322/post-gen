@@ -73,3 +73,13 @@ type server struct {
 	engine       Generator
 	templatesDir string
 }
+
+type affiliateLinkRequest struct {
+	URL string `json:"url"`
+	Tag string `json:"tag"`
+}
+
+type affiliateLinkResponse struct {
+	AffiliateURL string `json:"affiliate_url"`
+}
+

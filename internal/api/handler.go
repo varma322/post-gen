@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"post-gen/internal/core"
 	"post-gen/internal/generator"
 	"post-gen/internal/models"
+	"post-gen/internal/utils"
 	postgenWeb "post-gen/web"
 )
 
@@ -33,6 +35,7 @@ func newServer(engine Generator, templatesDir string, token string) http.Handler
 	mux.HandleFunc("/accounts/", srv.handleAccountByName)
 	mux.HandleFunc("/generate", srv.handleGenerate)
 	mux.HandleFunc("/generate/stream", srv.handleGenerateStream)
+	mux.HandleFunc("/generate/link", srv.handleGenerateLink)
 	mux.HandleFunc("/templates", srv.handleTemplates)
 	mux.HandleFunc("/templates/", srv.handleTemplateByName)
 	mux.Handle("/", http.FileServer(http.FS(postgenWeb.FS)))
@@ -525,4 +528,49 @@ func backupTemplateIfExists(path string) error {
 
 	backupPath := fmt.Sprintf("%s.bak-%s", path, time.Now().Format("20060102150405"))
 	return os.WriteFile(backupPath, data, 0644)
+}
+
+func (s server) handleGenerateLink(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+
+	defer r.Body.Close()
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	var req affiliateLinkRequest
+	if err := decoder.Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON payload"})
+		return
+	}
+
+	req.URL = strings.TrimSpace(req.URL)
+	if req.URL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "url is required"})
+		return
+	}
+
+	// 1. Resolve short URL if it's amzn.to/amzn.in
+	resolved := utils.ResolveAmazonShortURL(req.URL)
+
+	// 2. Extract tag from the URL query if none explicitly specified in payload
+	req.Tag = strings.TrimSpace(req.Tag)
+	if req.Tag == "" {
+		if u, err := url.Parse(resolved); err == nil {
+			req.Tag = u.Query().Get("tag")
+		}
+	}
+	if req.Tag == "" {
+		req.Tag = "yourtag-21" // default fallback
+	}
+
+	// 3. Normalize the URL (canonicalize dp link)
+	normalized := utils.NormalizeAmazonURL(resolved)
+
+	// 4. Append affiliate tag
+	tagged := utils.AddAffiliateTag(normalized, req.Tag)
+
+	writeJSON(w, http.StatusOK, affiliateLinkResponse{AffiliateURL: tagged})
 }

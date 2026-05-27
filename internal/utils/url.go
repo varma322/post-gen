@@ -10,7 +10,7 @@ import (
 
 var amazonASINRegex = regexp.MustCompile(`(?i)/(?:dp|gp/product|gp/aw/d|product)/([a-z0-9]{10})(?:[/?]|$)`)
 
-var shortURLResolver = resolveAmazonShortURL
+var shortURLResolver = ResolveAmazonShortURL
 
 // NormalizeAmazonURL trims Amazon links to canonical /dp/<ASIN> form when possible.
 func NormalizeAmazonURL(raw string) string {
@@ -28,7 +28,8 @@ func NormalizeURL(raw string) string {
 	return strings.TrimSpace(raw)
 }
 
-func resolveAmazonShortURL(raw string) string {
+// ResolveAmazonShortURL resolves amzn.to/amzn.in short URLs to their full redirect locations.
+func ResolveAmazonShortURL(raw string) string {
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return raw
@@ -62,6 +63,7 @@ func resolveAmazonShortURL(raw string) string {
 
 	return resolved
 }
+
 
 // AddAffiliateTag injects or overrides the affiliate tag query parameter.
 func AddAffiliateTag(raw string, tag string) string {

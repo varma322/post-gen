@@ -296,7 +296,7 @@ func TestGeneratePostsWithPublishSendsPost(t *testing.T) {
 		fbPublisher: fbPub,
 	}
 
-	results, err := engine.GeneratePostsWithPublish([]string{"https://amazon.in/dp/B0F7QR75X2"}, []string{"afficart"}, true, 0)
+	results, err := engine.GeneratePostsWithPublish([]string{"https://amazon.in/dp/B0F7QR75X2"}, []string{"afficart"}, true, 0, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

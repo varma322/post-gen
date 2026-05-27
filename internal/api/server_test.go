@@ -30,7 +30,7 @@ func (s stubGenerator) GeneratePosts(urls []string, accountNames []string) ([]co
 	return s.results, s.err
 }
 
-func (s stubGenerator) GeneratePostsWithPublish(urls []string, accountNames []string, publish bool, delayBetweenPosts time.Duration) ([]core.Result, error) {
+func (s stubGenerator) GeneratePostsWithPublish(urls []string, accountNames []string, publish bool, delayBetweenPosts time.Duration, onCooldown func(time.Duration)) ([]core.Result, error) {
 	if s.generateFunc != nil {
 		return s.generateFunc(urls, accountNames)
 	}
@@ -40,6 +40,15 @@ func (s stubGenerator) GeneratePostsWithPublish(urls []string, accountNames []st
 func (s stubGenerator) Accounts() []models.Account {
 	return s.accounts
 }
+
+func (s stubGenerator) ReloadAccounts() error {
+	return nil
+}
+
+func (s stubGenerator) Paths() core.Paths {
+	return core.Paths{}
+}
+
 
 func TestHandleGenerateReturnsResults(t *testing.T) {
 	handler := NewServer(stubGenerator{
@@ -254,7 +263,7 @@ func TestHandleHomeReturnsHTML(t *testing.T) {
 		t.Fatalf("unexpected content type: %s", contentType)
 	}
 
-	if !bytes.Contains(resp.Body.Bytes(), []byte("PostGen Cloud MVP")) {
+	if !bytes.Contains(resp.Body.Bytes(), []byte("postgen-ui")) {
 		t.Fatalf("expected home page content, got %s", resp.Body.String())
 	}
 }
@@ -467,3 +476,48 @@ func TestBearerTokenMiddlewareDisabledWhenTokenEmpty(t *testing.T) {
 		t.Fatalf("expected auth disabled (no token), got %d", resp.Code)
 	}
 }
+
+func TestHandleGenerateLink(t *testing.T) {
+	handler := NewServer(stubGenerator{}, "")
+
+	// 1. Basic URL + explicit Tag request
+	body := bytes.NewBufferString(`{"url":"https://www.amazon.in/dp/B0D1234567","tag":"customtag-21"}`)
+	req := httptest.NewRequest(http.MethodPost, "/generate/link", body)
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", resp.Code)
+	}
+
+	var payload affiliateLinkResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if payload.AffiliateURL != "https://www.amazon.in/dp/B0D1234567?tag=customtag-21" {
+		t.Fatalf("unexpected affiliate URL output: %s", payload.AffiliateURL)
+	}
+
+	// 2. Full URL with nested tag, extracting automatically
+	body2 := bytes.NewBufferString(`{"url":"https://www.amazon.in/Stanley-70-964E-Combination-Spanner-12-Pieces/dp/B00ICIKIW2?tag=smartbuy016-21"}`)
+	req2 := httptest.NewRequest(http.MethodPost, "/generate/link", body2)
+	resp2 := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp2, req2)
+
+	if resp2.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", resp2.Code)
+	}
+
+	var payload2 affiliateLinkResponse
+	if err := json.NewDecoder(resp2.Body).Decode(&payload2); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if payload2.AffiliateURL != "https://www.amazon.in/dp/B00ICIKIW2?tag=smartbuy016-21" {
+		t.Fatalf("unexpected affiliate URL extracted: %s", payload2.AffiliateURL)
+	}
+}
+
