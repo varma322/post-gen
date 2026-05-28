@@ -12,7 +12,6 @@ import (
 	"text/template"
 	"time"
 
-	"post-gen/internal/config"
 	"post-gen/internal/core"
 	"post-gen/internal/generator"
 	"post-gen/internal/models"
@@ -166,33 +165,23 @@ func (s server) handleUpdateAccount(w http.ResponseWriter, r *http.Request, name
 }
 
 func (s server) handleDeleteAccount(w http.ResponseWriter, name string) {
-	accounts := s.engine.Accounts()
-	filtered := make([]models.Account, 0, len(accounts))
-	found := false
-
-	for _, acc := range accounts {
-		if acc.Name == name {
-			found = true
-			continue
+	if err := s.engine.DeleteAccount(name); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "account not found"})
+			return
 		}
-		filtered = append(filtered, acc)
-	}
-
-	if !found {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "account not found"})
-		return
-	}
-
-	if err := s.saveAndReloadAccounts(filtered); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-
+	if err := s.engine.ReloadAccounts(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 func (s server) saveAndReloadAccounts(accounts []models.Account) error {
-	if err := config.SaveAccounts(s.engine.Paths().AccountsPath, accounts); err != nil {
+	if err := s.engine.SaveAccounts(accounts); err != nil {
 		return err
 	}
 	return s.engine.ReloadAccounts()

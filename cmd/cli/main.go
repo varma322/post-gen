@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -10,12 +11,21 @@ import (
 	"path/filepath"
 	"post-gen/internal/api"
 	"post-gen/internal/core"
+	"post-gen/internal/db"
 	"post-gen/internal/utils"
 	"strings"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
+
 func main() {
+	// Load .env from working directory (non-fatal if absent)
+	if err := godotenv.Load(); err != nil {
+		log.Println("[INFO] No .env file found, using system environment variables.")
+	}
+
 	url := flag.String("url", "", "Product URL to scrape")
 	filePath := flag.String("file", "", "Path to file containing product URLs for bulk processing")
 	accountName := flag.String("account", "", "Affiliate account name")
@@ -35,8 +45,18 @@ func main() {
 		token = strings.TrimSpace(os.Getenv("POSTGEN_API_TOKEN"))
 	}
 
+	// Connect to PostgreSQL (graceful fallback to JSON)
+	ctx := context.Background()
+	dbPool, err := db.New(ctx)
+	if err != nil {
+		log.Printf("[WARN] Could not connect to PostgreSQL (%v). Falling back to accounts.json.", err)
+		dbPool = nil
+	} else {
+		log.Println("[INFO] Connected to PostgreSQL.")
+	}
+
 	paths := core.DefaultPaths()
-	engine, err := core.NewEngine(paths)
+	engine, err := core.NewEngine(paths, dbPool)
 	if err != nil {
 		log.Fatalf("[ERR] Bootstrapping engine: %v", err)
 	}

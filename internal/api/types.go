@@ -12,6 +12,8 @@ type Generator interface {
 	GeneratePostsWithPublish(urls []string, accountNames []string, publish bool, delayBetweenPosts time.Duration, onCooldown func(time.Duration)) ([]core.Result, error)
 	Accounts() []models.Account
 	ReloadAccounts() error
+	SaveAccounts(accounts []models.Account) error
+	DeleteAccount(name string) error
 	Paths() core.Paths
 }
 

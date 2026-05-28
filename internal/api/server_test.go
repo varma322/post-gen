@@ -45,6 +45,14 @@ func (s stubGenerator) ReloadAccounts() error {
 	return nil
 }
 
+func (s stubGenerator) SaveAccounts(_ []models.Account) error {
+	return nil
+}
+
+func (s stubGenerator) DeleteAccount(_ string) error {
+	return nil
+}
+
 func (s stubGenerator) Paths() core.Paths {
 	return core.Paths{}
 }

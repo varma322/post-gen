@@ -67,3 +67,6 @@ dist-ssr
 *.sln
 *.sw?
 postgen-ui/.gitignore
+README.md.bak
+backup/gemini_api.py
+gemini_test.py
