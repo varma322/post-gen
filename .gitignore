@@ -70,3 +70,6 @@ postgen-ui/.gitignore
 README.md.bak
 backup/gemini_api.py
 gemini_test.py
+elements.html
+
+vps_deployment_plan.md

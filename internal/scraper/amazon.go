@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"math/rand"
 	"net"
 	"net/http"
@@ -151,6 +152,41 @@ func (a *AmazonScraper) Scrape(url string) (*models.Product, error) {
 
 	// Logic for calculating discount
 	product.Discount = calculateDiscount(product.DealPrice, product.MRP)
+
+	// Validate parsed prices against scraped savings/discount from the page
+	scrapedPct, scrapedAmount, hasPct, hasAmount := extractScrapedSavings(doc)
+	if mrpVal, okMRP := parsePriceToFloat(product.MRP); okMRP && mrpVal > 0 {
+		if dealVal, okDeal := parsePriceToFloat(product.DealPrice); okDeal && dealVal > 0 {
+			// 1. Validate absolute savings amount
+			if hasAmount && scrapedAmount > 0 {
+				calcAmount := mrpVal - dealVal
+				if calcAmount > 0 && math.Abs(calcAmount-scrapedAmount) > 2.0 {
+					log.Printf("[WARN] Price validation warning: MRP (%f) - DealPrice (%f) = %f does not match scraped absolute savings (%f)", mrpVal, dealVal, calcAmount, scrapedAmount)
+				}
+			}
+
+			// 2. Validate savings percentage
+			if hasPct && scrapedPct > 0 {
+				calcPct := ((mrpVal - dealVal) / mrpVal) * 100
+				if math.Abs(calcPct-scrapedPct) > 2.0 {
+					log.Printf("[WARN] Price validation warning: calculated discount %f%% does not match scraped discount %f%%", calcPct, scrapedPct)
+					
+					// If calculated discount is 0 but page says there is a non-zero discount,
+					// try to correct the MRP using fallback elements
+					if calcPct == 0 {
+						fallbackMRP := FindFirst(doc, ".basisPrice .a-offscreen, #metadata-map-mrp, .apex-basisprice-value", cleanPrice)
+						if fallbackMRP != "" {
+							if fVal, okF := parsePriceToFloat(fallbackMRP); okF && fVal > dealVal {
+								product.MRP = fallbackMRP
+								product.Discount = calculateDiscount(product.DealPrice, product.MRP)
+								log.Printf("[INFO] Corrected MRP using fallback to %s", fallbackMRP)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 
 	// Block / availability detection
 	if isCaptchaPage(doc) {
