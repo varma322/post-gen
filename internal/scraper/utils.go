@@ -96,3 +96,63 @@ func getHttpClient() *http.Client {
 func getRandomUserAgent() string {
 	return userAgents[rand.Intn(len(userAgents))]
 }
+
+// parsePriceToFloat cleans and parses a price string into a float64
+func parsePriceToFloat(priceStr string) (float64, bool) {
+	priceStr = strings.ReplaceAll(priceStr, ",", "")
+	priceStr = strings.ReplaceAll(priceStr, "₹", "")
+	priceStr = strings.TrimSpace(priceStr)
+
+	// Regex to match the first number (integer or decimal)
+	re := regexp.MustCompile(`[0-9]+(?:\.[0-9]+)?`)
+	match := re.FindString(priceStr)
+	if match == "" {
+		return 0, false
+	}
+
+	val, err := strconv.ParseFloat(match, 64)
+	if err != nil {
+		return 0, false
+	}
+	return val, true
+}
+
+// parseDiscountPercentage parses a discount percentage string into a float64
+func parseDiscountPercentage(discountStr string) (float64, bool) {
+	discountStr = strings.ReplaceAll(discountStr, "%", "")
+	discountStr = strings.ReplaceAll(discountStr, "-", "")
+	discountStr = strings.TrimSpace(discountStr)
+	val, err := strconv.ParseFloat(discountStr, 64)
+	if err != nil {
+		return 0, false
+	}
+	return val, true
+}
+
+// extractScrapedSavings parses the discount percentage or saving amount from the page
+func extractScrapedSavings(doc *goquery.Document) (scrapedPct float64, scrapedAmount float64, hasPct bool, hasAmount bool) {
+	// Look for percentage saving
+	pctSel := ".savingsPercentage, .reinventPriceSavingsPercentageMargin, .apex-savings-percentage"
+	pctText := doc.Find(pctSel).First().Text()
+	pctText = strings.TrimSpace(pctText)
+	if pctText != "" {
+		if val, ok := parseDiscountPercentage(pctText); ok && val > 0 {
+			scrapedPct = val
+			hasPct = true
+		}
+	}
+
+	// Look for absolute saving amount
+	amtSel := "#regularprice_savings, #dealprice_savings, .reinventPriceSavings, .price-character-saving-text"
+	amtText := doc.Find(amtSel).First().Text()
+	amtText = strings.TrimSpace(amtText)
+	if amtText != "" {
+		if val, ok := parsePriceToFloat(amtText); ok && val > 0 {
+			scrapedAmount = val
+			hasAmount = true
+		}
+	}
+
+	return
+}
+
