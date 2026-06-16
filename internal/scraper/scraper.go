@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 
 	"post-gen/internal/config"
@@ -22,7 +23,29 @@ func GetScraper(rawURL string, allSelectors config.Selectors) (Scraper, error) {
 		if !ok {
 			return nil, errors.New("amazon selectors missing from selectors.json")
 		}
-		return NewAmazonScraper(sel), nil
+
+		htmlScraper := NewAmazonScraper(sel)
+
+		// Check for Creators API credentials
+		clientID := os.Getenv("Credential_ID")
+		if clientID == "" {
+			clientID = os.Getenv("AMAZON_CREATOR_CLIENT_ID")
+		}
+		clientSecret := os.Getenv("Secret")
+		if clientSecret == "" {
+			clientSecret = os.Getenv("AMAZON_CREATOR_CLIENT_SECRET")
+		}
+		partnerTag := os.Getenv("AMAZON_CREATOR_PARTNER_TAG")
+		if partnerTag == "" {
+			partnerTag = os.Getenv("Application_ID")
+		}
+		tokenURL := os.Getenv("AMAZON_CREATOR_TOKEN_URL")
+
+		if clientID != "" && clientSecret != "" {
+			return NewAmazonCreatorAPIScraper(clientID, clientSecret, tokenURL, partnerTag, htmlScraper), nil
+		}
+
+		return htmlScraper, nil
 	}
 
 	// Future platforms like Flipkart can be added here
@@ -43,3 +66,4 @@ func IsValidURL(u string) bool {
 	}
 	return true
 }
+

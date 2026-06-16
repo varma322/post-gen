@@ -73,3 +73,6 @@ gemini_test.py
 elements.html
 
 vps_deployment_plan.md
+graphify-out/
+chatgpt_API.py
+implementation_plan.md
