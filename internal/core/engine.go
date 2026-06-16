@@ -11,6 +11,7 @@ import (
 	"post-gen/internal/publisher"
 	"post-gen/internal/scraper"
 	"post-gen/internal/utils"
+	"strings"
 	"time"
 )
 
@@ -155,21 +156,21 @@ func (e *Engine) DeleteAccount(name string) error {
 
 // GeneratePosts processes each URL for the requested accounts.
 // If accountNames is empty, all configured accounts are used.
-func (e *Engine) GeneratePosts(urls []string, accountNames []string) ([]Result, error) {
-	return e.GeneratePostsWithPublish(urls, accountNames, false, 0, nil)
+func (e *Engine) GeneratePosts(ctx context.Context, urls []string, accountNames []string) ([]Result, error) {
+	return e.GeneratePostsWithPublish(ctx, urls, accountNames, false, 0, nil)
 }
 
 // GeneratePostsWithPublish processes each URL, enriches with AI, generates posts,
 // and optionally publishes them to Facebook Pages.
 // If accountNames is empty, all configured accounts are used.
-func (e *Engine) GeneratePostsWithPublish(urls []string, accountNames []string, publish bool, delayBetweenPosts time.Duration, onCooldown func(time.Duration)) ([]Result, error) {
+func (e *Engine) GeneratePostsWithPublish(ctx context.Context, urls []string, accountNames []string, publish bool, delayBetweenPosts time.Duration, onCooldown func(time.Duration)) ([]Result, error) {
 	targetAccounts, err := e.resolveAccounts(accountNames)
 	if err != nil {
 		return nil, err
 	}
 
 	results := make([]Result, 0, len(urls)*len(targetAccounts))
-	publishCount := 0
+	publishAttempts := 0
 
 	for _, rawURL := range urls {
 		url := utils.NormalizeURL(rawURL)
@@ -190,7 +191,7 @@ func (e *Engine) GeneratePostsWithPublish(urls []string, accountNames []string, 
 			continue
 		}
 
-		product, err := s.Scrape(url)
+		product, err := s.Scrape(ctx, url)
 		if err != nil {
 			results = append(results, Result{
 				URL:   url,
@@ -201,6 +202,17 @@ func (e *Engine) GeneratePostsWithPublish(urls []string, accountNames []string, 
 
 		enrichBaseProduct(product)
 
+		priceCleaned := strings.ToLower(strings.TrimSpace(product.DealPrice))
+		if priceCleaned == "" || priceCleaned == "out of stock" || strings.Contains(priceCleaned, "unavailable") {
+			results = append(results, Result{
+				URL:          url,
+				ProductTitle: product.Title,
+				Product:      *product,
+				Error:        "Product is out of stock or price is empty; skipping post generation",
+			})
+			continue
+		}
+
 		for _, account := range targetAccounts {
 			productForAccount := *product
 			affiliateLink := utils.AddAffiliateTag(url, account.AffiliateTag)
@@ -210,8 +222,8 @@ func (e *Engine) GeneratePostsWithPublish(urls []string, accountNames []string, 
 			// The enriched fields are then fed into each account's unique .tmpl template.
 			// UseAI defaults to true; accounts can opt out by setting UseAI=false.
 			if account.UseAI {
-				ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-				productForAccount = e.aiEnricher.Enrich(ctx, productForAccount, account)
+				enrichCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+				productForAccount = e.aiEnricher.Enrich(enrichCtx, productForAccount, account)
 				cancel()
 			}
 
@@ -232,12 +244,13 @@ func (e *Engine) GeneratePostsWithPublish(urls []string, accountNames []string, 
 
 			// Core Facebook publishing integration
 			if publish && account.FacebookPageID != "" && account.FacebookAccessToken != "" {
-				if publishCount > 0 && delayBetweenPosts > 0 {
+				if publishAttempts > 0 && delayBetweenPosts > 0 {
 					if onCooldown != nil {
 						onCooldown(delayBetweenPosts)
 					}
 					time.Sleep(delayBetweenPosts)
 				}
+				publishAttempts++
 
 				pubID, pubErr := e.fbPublisher.PublishPagePost(
 					account.FacebookPageID,
@@ -249,7 +262,6 @@ func (e *Engine) GeneratePostsWithPublish(urls []string, accountNames []string, 
 					result.PublishError = pubErr.Error()
 				} else {
 					result.PublishID = pubID
-					publishCount++
 				}
 			}
 
@@ -258,6 +270,22 @@ func (e *Engine) GeneratePostsWithPublish(urls []string, accountNames []string, 
 	}
 
 	return results, nil
+}
+
+// PublishPost publishes a pre-generated post directly to Facebook for the given account.
+func (e *Engine) PublishPost(accountName, postText string) (string, error) {
+	targetAccounts, err := e.resolveAccounts([]string{accountName})
+	if err != nil {
+		return "", err
+	}
+	if len(targetAccounts) == 0 {
+		return "", fmt.Errorf("account %q not found", accountName)
+	}
+	account := targetAccounts[0]
+	if account.FacebookPageID == "" || account.FacebookAccessToken == "" {
+		return "", fmt.Errorf("facebook credentials not configured for account %q", accountName)
+	}
+	return e.fbPublisher.PublishPagePost(account.FacebookPageID, account.FacebookAccessToken, postText)
 }
 
 func (e *Engine) resolveAccounts(accountNames []string) ([]models.Account, error) {

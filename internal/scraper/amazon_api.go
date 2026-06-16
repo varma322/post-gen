@@ -127,7 +127,7 @@ func NewAmazonCreatorAPIScraper(clientID, clientSecret, tokenURL, defaultPartner
 }
 
 // Scrape implements the Scraper interface.
-func (s *AmazonCreatorAPIScraper) Scrape(rawURL string) (*models.Product, error) {
+func (s *AmazonCreatorAPIScraper) Scrape(ctx context.Context, rawURL string) (*models.Product, error) {
 	// First, resolve short URLs
 	resolvedURL := utils.ResolveAmazonShortURL(rawURL)
 
@@ -135,23 +135,23 @@ func (s *AmazonCreatorAPIScraper) Scrape(rawURL string) (*models.Product, error)
 	asin := extractASIN(resolvedURL)
 	if asin == "" {
 		log.Printf("[WARN] Creators API: failed to extract ASIN from %s. Falling back to HTML scraping.", rawURL)
-		return s.fallback.Scrape(rawURL)
+		return s.fallback.Scrape(ctx, rawURL)
 	}
 
 	// Extract marketplace
 	marketplace := getMarketplace(resolvedURL)
 
 	// Fetch from Creators API
-	product, err := s.fetchFromAPI(asin, marketplace, resolvedURL)
+	product, err := s.fetchFromAPI(ctx, asin, marketplace, resolvedURL)
 	if err != nil {
 		log.Printf("[WARN] Creators API failed: %v. Falling back to HTML scraping.", err)
-		return s.fallback.Scrape(rawURL)
+		return s.fallback.Scrape(ctx, rawURL)
 	}
 
 	return product, nil
 }
 
-func (s *AmazonCreatorAPIScraper) fetchFromAPI(asin, marketplace, rawURL string) (*models.Product, error) {
+func (s *AmazonCreatorAPIScraper) fetchFromAPI(ctx context.Context, asin, marketplace, rawURL string) (*models.Product, error) {
 	token, err := s.tokenManager.GetToken()
 	if err != nil {
 		return nil, fmt.Errorf("auth token error: %w", err)
@@ -180,7 +180,7 @@ func (s *AmazonCreatorAPIScraper) fetchFromAPI(asin, marketplace, rawURL string)
 	}
 
 	apiURL := "https://creatorsapi.amazon/catalog/v1/getItems"
-	req, err := http.NewRequestWithContext(context.Background(), "POST", apiURL, bytes.NewReader(payloadBytes))
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(payloadBytes))
 	if err != nil {
 		return nil, fmt.Errorf("creating API request: %w", err)
 	}

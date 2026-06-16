@@ -106,7 +106,7 @@ func main() {
 		accountNames = []string{*accountName}
 	}
 
-	results, err := engine.GeneratePostsWithPublish(urls, accountNames, *publish, *publishDelay, func(d time.Duration) {
+	results, err := engine.GeneratePostsWithPublish(ctx, urls, accountNames, *publish, *publishDelay, func(d time.Duration) {
 		log.Printf("[INFO] Waiting %v before next publish to prevent rate limiting...", d)
 	})
 	if err != nil {

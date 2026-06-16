@@ -19,6 +19,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -29,8 +30,9 @@ import (
 
 // BotEngine is the minimal interface the bot needs from the core engine.
 type BotEngine interface {
-	GeneratePosts(urls []string, accountNames []string) ([]core.Result, error)
-	GeneratePostsWithPublish(urls []string, accountNames []string, publish bool, delay time.Duration, onCooldown func(time.Duration)) ([]core.Result, error)
+	GeneratePosts(ctx context.Context, urls []string, accountNames []string) ([]core.Result, error)
+	GeneratePostsWithPublish(ctx context.Context, urls []string, accountNames []string, publish bool, delay time.Duration, onCooldown func(time.Duration)) ([]core.Result, error)
+	PublishPost(accountName, postText string) (string, error)
 	Accounts() []models.Account
 }
 
@@ -40,7 +42,8 @@ type Bot struct {
 	engine       BotEngine
 	allowedUsers map[int64]bool
 	// userState tracks the last generated results per user, keyed by Telegram user ID.
-	userState map[int64]*userSession
+	stateMu      sync.RWMutex
+	userState    map[int64]*userSession
 }
 
 // userSession holds state between scrape and publish for a single user.
@@ -100,6 +103,8 @@ func (b *Bot) Run(ctx context.Context) {
 
 // getSession gets or creates a userSession for the given user ID.
 func (b *Bot) getSession(userID int64) *userSession {
+	b.stateMu.Lock()
+	defer b.stateMu.Unlock()
 	session, ok := b.userState[userID]
 	if !ok {
 		session = &userSession{
@@ -208,7 +213,9 @@ func (b *Bot) handleCommand(chatID, userID int64, cmd string) {
 	case strings.HasPrefix(cmd, "/status"):
 		b.send(chatID, fmt.Sprintf("✅ Bot is online — @%s", b.api.Self.UserName))
 	case strings.HasPrefix(cmd, "/cancel"):
+		b.stateMu.Lock()
 		delete(b.userState, userID)
+		b.stateMu.Unlock()
 		b.send(chatID, "❌ Session cancelled.")
 	default:
 		b.send(chatID, "Unknown command. Use the menu buttons below to get started!")
@@ -344,12 +351,16 @@ func (b *Bot) handleCallback(query *tgbotapi.CallbackQuery) {
 	_, _ = b.api.Request(ack)
 
 	if data == "cancel" {
+		b.stateMu.Lock()
 		delete(b.userState, userID)
+		b.stateMu.Unlock()
 		b.editMessage(chatID, query.Message.MessageID, "❌ Cancelled.")
 		return
 	}
 
+	b.stateMu.RLock()
 	session, ok := b.userState[userID]
+	b.stateMu.RUnlock()
 	if !ok {
 		b.send(chatID, "⚠️ Session expired. Please start again.")
 		return
@@ -414,7 +425,7 @@ func (b *Bot) executeGeneration(chatID, userID int64, session *userSession, targ
 	typing := tgbotapi.NewChatAction(chatID, tgbotapi.ChatTyping)
 	_, _ = b.api.Send(typing)
 
-	results, err := b.engine.GeneratePosts([]string{session.url}, targetAccounts)
+	results, err := b.engine.GeneratePosts(context.Background(), []string{session.url}, targetAccounts)
 	if err != nil || len(results) == 0 {
 		b.send(chatID, fmt.Sprintf("❌ Failed to process URL:\n`%v`", err), tgbotapi.ModeMarkdown)
 		return
@@ -479,42 +490,61 @@ func (b *Bot) executeGeneration(chatID, userID int64, session *userSession, targ
 func (b *Bot) publishForUser(chatID, userID int64, session *userSession, accountTarget string, msgID int) {
 	b.editMessage(chatID, msgID, "⏳ Publishing to Facebook…")
 
-	var accountNames []string
-	if accountTarget != "ALL" {
-		accountNames = []string{accountTarget}
+	var targetResults []core.Result
+	for _, r := range session.results {
+		if r.Error != "" {
+			continue
+		}
+		if accountTarget == "ALL" || r.Account == accountTarget {
+			targetResults = append(targetResults, r)
+		}
 	}
 
-	results, err := b.engine.GeneratePostsWithPublish(
-		[]string{session.url},
-		accountNames,
-		true,
-		15*time.Minute,
-		func(d time.Duration) {
-			b.send(chatID, fmt.Sprintf("⏳ Rate-limit cooldown: waiting %v before next post…", d))
-		},
-	)
-
-	if err != nil {
-		b.send(chatID, fmt.Sprintf("❌ Publish error: %v", err))
+	if len(targetResults) == 0 {
+		b.send(chatID, "⚠️ No valid generated posts found to publish.")
 		return
+	}
+
+	var publishResults []core.Result
+	publishAttempts := 0
+
+	for _, r := range targetResults {
+		if publishAttempts > 0 {
+			delay := 15 * time.Minute
+			b.send(chatID, fmt.Sprintf("⏳ Rate-limit cooldown: waiting %v before next post…", delay))
+			time.Sleep(delay)
+		}
+		publishAttempts++
+
+		pubID, err := b.engine.PublishPost(r.Account, r.Output)
+		if err != nil {
+			if strings.Contains(err.Error(), "credentials not configured") {
+				r.PublishError = ""
+			} else {
+				r.PublishError = err.Error()
+			}
+		} else {
+			r.PublishID = pubID
+		}
+		publishResults = append(publishResults, r)
 	}
 
 	var sb strings.Builder
 	sb.WriteString("📊 *Publish Results:*\n\n")
-	for _, r := range results {
+	for _, r := range publishResults {
 		if r.PublishID != "" {
 			sb.WriteString(fmt.Sprintf("✅ *[%s]* Published! Post ID: `%s`\n", r.Account, r.PublishID))
 		} else if r.PublishError != "" {
 			sb.WriteString(fmt.Sprintf("❌ *[%s]* Failed: %s\n", r.Account, r.PublishError))
-		} else if r.Error != "" {
-			sb.WriteString(fmt.Sprintf("⚠️ *[%s]* Error: %s\n", r.Account, r.Error))
 		} else {
 			sb.WriteString(fmt.Sprintf("ℹ️ *[%s]* No Facebook credentials configured — post generated but not published.\n", r.Account))
 		}
 	}
 
 	// Clean up session
+	b.stateMu.Lock()
 	delete(b.userState, userID)
+	b.stateMu.Unlock()
 
 	b.send(chatID, sb.String(), tgbotapi.ModeMarkdown)
 }

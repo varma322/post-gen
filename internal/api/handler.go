@@ -42,7 +42,8 @@ func newServer(engine Generator, templatesDir string, token string) http.Handler
 	// Protect all routes except /health and static frontend files with Bearer token auth.
 	// This allows the Web UI to load so the user can enter their token.
 	skipPaths := []string{"/health", "/", "/index.html", "/app.js", "/styles.css"}
-	return BearerTokenMiddleware(token, skipPaths, mux)
+	handler := BearerTokenMiddleware(token, skipPaths, mux)
+	return MaxBytesMiddleware(1024*1024, handler)
 }
 
 func (s server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -211,7 +212,7 @@ func (s server) handleGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	accounts := normalizeValues(req.Accounts)
-	results, err := s.engine.GeneratePostsWithPublish(urls, accounts, req.Publish, time.Duration(req.PublishDelayMinutes)*time.Minute, nil)
+	results, err := s.engine.GeneratePostsWithPublish(r.Context(), urls, accounts, req.Publish, time.Duration(req.PublishDelayMinutes)*time.Minute, nil)
 	if err != nil {
 		var accountErr core.AccountNotFoundError
 		if errors.As(err, &accountErr) {
@@ -286,7 +287,7 @@ func (s server) handleGenerateStream(w http.ResponseWriter, r *http.Request) {
 			time.Sleep(delay)
 		}
 
-		results, err := s.engine.GeneratePostsWithPublish([]string{rawURL}, accounts, req.Publish, time.Duration(req.PublishDelayMinutes)*time.Minute, func(d time.Duration) {
+		results, err := s.engine.GeneratePostsWithPublish(r.Context(), []string{rawURL}, accounts, req.Publish, time.Duration(req.PublishDelayMinutes)*time.Minute, func(d time.Duration) {
 			_ = writeSSE(w, "cooldown", map[string]int{"duration_seconds": int(d.Seconds())})
 			flusher.Flush()
 		})
@@ -552,7 +553,11 @@ func (s server) handleGenerateLink(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.Tag == "" {
-		req.Tag = "yourtag-21" // default fallback
+		req.Tag = os.Getenv("DEFAULT_AFFILIATE_TAG")
+	}
+	if req.Tag == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "affiliate tag is required (specify 'tag' in request or set DEFAULT_AFFILIATE_TAG environment variable)"})
+		return
 	}
 
 	// 3. Normalize the URL (canonicalize dp link)

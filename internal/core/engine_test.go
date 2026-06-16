@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -18,9 +19,12 @@ type stubScraper struct {
 	err     error
 }
 
-func (s stubScraper) Scrape(url string) (*models.Product, error) {
+func (s stubScraper) Scrape(ctx context.Context, url string) (*models.Product, error) {
 	if s.err != nil {
 		return nil, s.err
+	}
+	if s.product != nil && s.product.DealPrice == "" {
+		s.product.DealPrice = "1,000"
 	}
 	return s.product, nil
 }
@@ -30,7 +34,7 @@ func TestGeneratePostsRejectsUnknownAccount(t *testing.T) {
 		accounts: []models.Account{{Name: "afficart", TemplatePath: "templates/afficart.tmpl"}},
 	}
 
-	_, err := engine.GeneratePosts([]string{"https://amazon.in/example"}, []string{"missing"})
+	_, err := engine.GeneratePosts(context.Background(), []string{"https://amazon.in/example"}, []string{"missing"})
 	if err == nil {
 		t.Fatal("expected unknown account error")
 	}
@@ -45,7 +49,7 @@ func TestGeneratePostsReturnsInvalidURLResult(t *testing.T) {
 		accounts: []models.Account{{Name: "afficart", TemplatePath: "templates/afficart.tmpl"}},
 	}
 
-	results, err := engine.GeneratePosts([]string{"not-a-url"}, []string{"afficart"})
+	results, err := engine.GeneratePosts(context.Background(), []string{"not-a-url"}, []string{"afficart"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -69,7 +73,7 @@ func TestGeneratePostsReturnsUnsupportedPlatformResult(t *testing.T) {
 		},
 	}
 
-	results, err := engine.GeneratePosts([]string{"https://example.com/product"}, []string{"afficart"})
+	results, err := engine.GeneratePosts(context.Background(), []string{"https://example.com/product"}, []string{"afficart"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -99,7 +103,7 @@ func TestGeneratePostsReturnsRenderedOutputForEachAccount(t *testing.T) {
 		},
 	}
 
-	results, err := engine.GeneratePosts([]string{"https://amazon.in/example"}, nil)
+	results, err := engine.GeneratePosts(context.Background(), []string{"https://amazon.in/example"}, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -136,7 +140,7 @@ func TestGeneratePostsReturnsGenerationErrorPerAccount(t *testing.T) {
 		},
 	}
 
-	results, err := engine.GeneratePosts([]string{"https://amazon.in/example"}, []string{"afficart"})
+	results, err := engine.GeneratePosts(context.Background(), []string{"https://amazon.in/example"}, []string{"afficart"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -166,7 +170,7 @@ func TestGeneratePostsKeepsFullAmazonURLBeforeScrape(t *testing.T) {
 	}
 
 	messy := "https://www.amazon.in/Some-Title/dp/B0F7QR75X2?tag=abc&ref=something"
-	results, err := engine.GeneratePosts([]string{messy}, []string{"afficart"})
+	results, err := engine.GeneratePosts(context.Background(), []string{messy}, []string{"afficart"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -196,7 +200,7 @@ func TestGeneratePostsKeepsShortLinkUnchanged(t *testing.T) {
 	}
 
 	shortURL := "https://amzn.in/d/xyz123"
-	results, err := engine.GeneratePosts([]string{shortURL}, []string{"afficart"})
+	results, err := engine.GeneratePosts(context.Background(), []string{shortURL}, []string{"afficart"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -229,7 +233,7 @@ func TestGeneratePostsInjectsAffiliateTagPerAccount(t *testing.T) {
 		},
 	}
 
-	_, err := engine.GeneratePosts([]string{"https://www.amazon.in/dp/B0F7QR75X2"}, []string{"zonerush"})
+	_, err := engine.GeneratePosts(context.Background(), []string{"https://www.amazon.in/dp/B0F7QR75X2"}, []string{"zonerush"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -258,7 +262,7 @@ func TestGeneratePostsKeepsURLWhenAffiliateTagEmpty(t *testing.T) {
 		},
 	}
 
-	_, err := engine.GeneratePosts([]string{"https://www.amazon.in/dp/B0F7QR75X2"}, []string{"afficart"})
+	_, err := engine.GeneratePosts(context.Background(), []string{"https://www.amazon.in/dp/B0F7QR75X2"}, []string{"afficart"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -296,7 +300,7 @@ func TestGeneratePostsWithPublishSendsPost(t *testing.T) {
 		fbPublisher: fbPub,
 	}
 
-	results, err := engine.GeneratePostsWithPublish([]string{"https://amazon.in/dp/B0F7QR75X2"}, []string{"afficart"}, true, 0, nil)
+	results, err := engine.GeneratePostsWithPublish(context.Background(), []string{"https://amazon.in/dp/B0F7QR75X2"}, []string{"afficart"}, true, 0, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -313,3 +317,45 @@ func TestGeneratePostsWithPublishSendsPost(t *testing.T) {
 		t.Fatalf("unexpected publish error: %s", results[0].PublishError)
 	}
 }
+
+func TestGeneratePostsSkipsOutOfStock(t *testing.T) {
+	engine := Engine{
+		accounts: []models.Account{
+			{Name: "afficart", TemplatePath: "templates/afficart.tmpl"},
+		},
+		selectors: config.Selectors{},
+		scraperFactory: func(url string, sel config.Selectors) (scraper.Scraper, error) {
+			// Stub scraper returns a product marked as Out of stock
+			return stubScraper{product: &models.Product{
+				Title:     "Out Of Stock Item",
+				Link:      url,
+				DealPrice: "Out of stock",
+			}}, nil
+		},
+		postGenerator: func(product models.Product, path string) (string, error) {
+			return "rendered output", nil
+		},
+	}
+
+	results, err := engine.GeneratePosts(context.Background(), []string{"https://amazon.in/dp/B08JW4QBSL"}, []string{"afficart"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	if results[0].Error == "" {
+		t.Fatal("expected an error remark for out of stock product, got none")
+	}
+
+	if !strings.Contains(results[0].Error, "out of stock") {
+		t.Fatalf("expected out of stock remark error, got '%s'", results[0].Error)
+	}
+
+	if results[0].Output != "" {
+		t.Fatalf("expected no generated output, got '%s'", results[0].Output)
+	}
+}
+

@@ -1,6 +1,7 @@
 package scraper
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -28,7 +29,7 @@ func NewAmazonScraper(sel config.PlatformSelectors) *AmazonScraper {
 }
 
 // Scrape performs the scraping logic for Amazon.
-func (a *AmazonScraper) Scrape(url string) (*models.Product, error) {
+func (a *AmazonScraper) Scrape(ctx context.Context, url string) (*models.Product, error) {
 	maxRetries := 3
 	var res *http.Response
 	var err error
@@ -39,7 +40,7 @@ func (a *AmazonScraper) Scrape(url string) (*models.Product, error) {
 			time.Sleep(time.Duration(rand.Intn(1000)) * time.Millisecond)
 		}
 
-		req, reqErr := http.NewRequest("GET", url, nil)
+		req, reqErr := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if reqErr != nil {
 			return nil, reqErr
 		}
@@ -108,6 +109,9 @@ func (a *AmazonScraper) Scrape(url string) (*models.Product, error) {
 		return nil, err
 	}
 
+	// Remove third-party / other sellers boxes to avoid matching their prices
+	doc.Find("#moreBuyingChoices_feature_div, #olpLinkWidget_feature_div, #mbc, .olp-wrapper, #buying-options-prices, #olp-upd-new, #alternateMultibuyingTemplates_feature_div").Remove()
+
 	var product models.Product
 	product.Link = url
 
@@ -135,6 +139,18 @@ func (a *AmazonScraper) Scrape(url string) (*models.Product, error) {
 	}
 	if product.DealPrice == "" && product.MRP != "" {
 		product.DealPrice = product.MRP
+	}
+
+	// Check if sold by a third-party seller
+	merchantInfo := strings.ToLower(cleanText(doc.Find("#merchant-info").Text()))
+	if merchantInfo != "" {
+		if strings.Contains(merchantInfo, "sold by") || strings.Contains(merchantInfo, "dispatched from") {
+			if !strings.Contains(merchantInfo, "amazon") && !strings.Contains(merchantInfo, "appario") {
+				log.Printf("[INFO] Skipping third-party seller product: %s (Merchant: %s)", product.Title, merchantInfo)
+				product.DealPrice = ""
+				product.MRP = ""
+			}
+		}
 	}
 
 	// Features

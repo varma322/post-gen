@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -23,18 +24,22 @@ type stubGenerator struct {
 	generateFunc func(urls []string, accountNames []string) ([]core.Result, error)
 }
 
-func (s stubGenerator) GeneratePosts(urls []string, accountNames []string) ([]core.Result, error) {
+func (s stubGenerator) GeneratePosts(ctx context.Context, urls []string, accountNames []string) ([]core.Result, error) {
 	if s.generateFunc != nil {
 		return s.generateFunc(urls, accountNames)
 	}
 	return s.results, s.err
 }
 
-func (s stubGenerator) GeneratePostsWithPublish(urls []string, accountNames []string, publish bool, delayBetweenPosts time.Duration, onCooldown func(time.Duration)) ([]core.Result, error) {
+func (s stubGenerator) GeneratePostsWithPublish(ctx context.Context, urls []string, accountNames []string, publish bool, delayBetweenPosts time.Duration, onCooldown func(time.Duration)) ([]core.Result, error) {
 	if s.generateFunc != nil {
 		return s.generateFunc(urls, accountNames)
 	}
 	return s.results, s.err
+}
+
+func (s stubGenerator) PublishPost(accountName, postText string) (string, error) {
+	return "mock_publish_id", nil
 }
 
 func (s stubGenerator) Accounts() []models.Account {
@@ -526,6 +531,19 @@ func TestHandleGenerateLink(t *testing.T) {
 
 	if payload2.AffiliateURL != "https://www.amazon.in/dp/B00ICIKIW2?tag=smartbuy016-21" {
 		t.Fatalf("unexpected affiliate URL extracted: %s", payload2.AffiliateURL)
+	}
+
+	// 3. Missing tag and no default env var, expecting 400 Bad Request
+	body3 := bytes.NewBufferString(`{"url":"https://www.amazon.in/dp/B0D1234567"}`)
+	req3 := httptest.NewRequest(http.MethodPost, "/generate/link", body3)
+	resp3 := httptest.NewRecorder()
+
+	os.Setenv("DEFAULT_AFFILIATE_TAG", "")
+
+	handler.ServeHTTP(resp3, req3)
+
+	if resp3.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", resp3.Code)
 	}
 }
 

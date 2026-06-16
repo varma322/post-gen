@@ -1,6 +1,7 @@
 package scraper
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -18,7 +19,7 @@ type MockScraper struct {
 	Err    error
 }
 
-func (m *MockScraper) Scrape(url string) (*models.Product, error) {
+func (m *MockScraper) Scrape(ctx context.Context, url string) (*models.Product, error) {
 	m.Called = true
 	return m.Result, m.Err
 }
@@ -219,7 +220,7 @@ func TestAmazonCreatorAPIScraper_Scrape_Success(t *testing.T) {
 		return oldTransport.RoundTrip(req)
 	})
 
-	product, err := scraper.Scrape("https://www.amazon.in/dp/B08G9J44ZN")
+	product, err := scraper.Scrape(context.Background(), "https://www.amazon.in/dp/B08G9J44ZN")
 	if err != nil {
 		t.Fatalf("scrape failed: %v", err)
 	}
@@ -255,7 +256,7 @@ func TestAmazonCreatorAPIScraper_Fallback(t *testing.T) {
 	fallback := &MockScraper{Result: expectedProduct}
 	scraper := NewAmazonCreatorAPIScraper("id", "secret", oauthServer.URL, "tag-21", fallback)
 
-	product, err := scraper.Scrape("https://www.amazon.in/dp/B08G9J44ZN")
+	product, err := scraper.Scrape(context.Background(), "https://www.amazon.in/dp/B08G9J44ZN")
 	if err != nil {
 		t.Fatalf("expected no error (because fallback succeeded), got %v", err)
 	}

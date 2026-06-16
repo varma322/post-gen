@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"post-gen/internal/core"
 	"post-gen/internal/models"
 	"time"
@@ -8,8 +9,9 @@ import (
 
 // Generator describes the core capabilities required by the HTTP layer.
 type Generator interface {
-	GeneratePosts(urls []string, accountNames []string) ([]core.Result, error)
-	GeneratePostsWithPublish(urls []string, accountNames []string, publish bool, delayBetweenPosts time.Duration, onCooldown func(time.Duration)) ([]core.Result, error)
+	GeneratePosts(ctx context.Context, urls []string, accountNames []string) ([]core.Result, error)
+	GeneratePostsWithPublish(ctx context.Context, urls []string, accountNames []string, publish bool, delayBetweenPosts time.Duration, onCooldown func(time.Duration)) ([]core.Result, error)
+	PublishPost(accountName, postText string) (string, error)
 	Accounts() []models.Account
 	ReloadAccounts() error
 	SaveAccounts(accounts []models.Account) error

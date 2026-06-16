@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 
@@ -30,7 +31,7 @@ func main() {
 
 	fmt.Printf("Using scraper type: %T\n", s)
 
-	product, err := s.Scrape(url)
+	product, err := s.Scrape(context.Background(), url)
 	if err != nil {
 		log.Fatalf("Scrape error: %v", err)
 	}

@@ -1,6 +1,7 @@
 package scraper
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -13,7 +14,7 @@ import (
 
 // Scraper defines the interface for platform-specific scraping logic.
 type Scraper interface {
-	Scrape(url string) (*models.Product, error)
+	Scrape(ctx context.Context, url string) (*models.Product, error)
 }
 
 // GetScraper returns an appropriate Scraper implementation based on the URL domain.

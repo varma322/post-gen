@@ -46,3 +46,11 @@ func BearerTokenMiddleware(token string, skip []string, next http.Handler) http.
 		next.ServeHTTP(w, r)
 	})
 }
+
+// MaxBytesMiddleware limits the size of the request body to prevent unbounded memory usage.
+func MaxBytesMiddleware(limit int64, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
+		next.ServeHTTP(w, r)
+	})
+}

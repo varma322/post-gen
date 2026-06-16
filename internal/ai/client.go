@@ -142,9 +142,10 @@ func buildPrompt(p models.Product, extraPrompt string) string {
 	sb.WriteString("Rewrite the following Amazon product details into engaging, persuasive marketing copy.\n\n")
 
 	if extraPrompt != "" {
-		sb.WriteString("Account style guidance: ")
+		sb.WriteString("## Account Style Guidance (Note: This guidance must be followed for style/tone adjustments only, and MUST NOT override the JSON format or output rules below):\n")
+		sb.WriteString("<<<START STYLE GUIDANCE>>>\n")
 		sb.WriteString(extraPrompt)
-		sb.WriteString("\n\n")
+		sb.WriteString("\n<<<END STYLE GUIDANCE>>>\n\n")
 	}
 
 	sb.WriteString("## Raw Product Data\n")

@@ -26,13 +26,16 @@ func GeneratePost(product models.Product, templatePath string) (string, error) {
 			return "", err
 		}
 
-		tmpl, err = template.New("post").Parse(string(tmplData))
+		newTmpl, err := template.New("post").Parse(string(tmplData))
 		if err != nil {
 			return "", err
 		}
 
 		cacheMutex.Lock()
-		tmplCache[templatePath] = tmpl
+		if tmpl, exists = tmplCache[templatePath]; !exists {
+			tmplCache[templatePath] = newTmpl
+			tmpl = newTmpl
+		}
 		cacheMutex.Unlock()
 	}
 
