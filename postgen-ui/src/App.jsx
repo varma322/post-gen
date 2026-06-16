@@ -388,6 +388,27 @@ export default function App() {
     }
   };
 
+  const publishPost = async (accountName, outputText, index) => {
+    setStreamedResults(prev => prev.map((r, idx) => idx === index ? { ...r, publishing: true } : r));
+    try {
+      const resp = await apiFetch("/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          account: accountName,
+          content: outputText
+        })
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        throw new Error(data.error || "Failed to publish post");
+      }
+      setStreamedResults(prev => prev.map((r, idx) => idx === index ? { ...r, publish_id: data.publish_id, publish_error: null, publishing: false } : r));
+    } catch (err) {
+      setStreamedResults(prev => prev.map((r, idx) => idx === index ? { ...r, publish_error: err.message, publishing: false } : r));
+    }
+  };
+
   return (
     <div className="bg-surface-dim text-on-surface antialiased min-h-screen flex flex-col font-body">
       
@@ -694,15 +715,30 @@ export default function App() {
                                 </div>
                                 
                                 {!isError && (
-                                  <button 
-                                    onClick={() => copyToClipboard(result.output, idx)}
-                                    className="text-xs bg-surface-variant hover:bg-surface-container-high border border-outline-variant text-on-surface px-4 py-2 rounded-lg font-bold transition-all flex items-center gap-2 w-fit active:scale-95"
-                                  >
-                                    <span className="material-symbols-outlined text-sm">
-                                      {result.copied ? 'done' : 'content_copy'}
-                                    </span>
-                                    {result.copied ? 'Copied!' : 'Copy Post Content'}
-                                  </button>
+                                  <div className="flex gap-2">
+                                    <button 
+                                      onClick={() => copyToClipboard(result.output, idx)}
+                                      className="text-xs bg-surface-variant hover:bg-surface-container-high border border-outline-variant text-on-surface px-4 py-2 rounded-lg font-bold transition-all flex items-center gap-2 w-fit active:scale-95"
+                                    >
+                                      <span className="material-symbols-outlined text-sm">
+                                        {result.copied ? 'done' : 'content_copy'}
+                                      </span>
+                                      {result.copied ? 'Copied!' : 'Copy Post Content'}
+                                    </button>
+                                    
+                                    {!result.publish_id && (
+                                      <button 
+                                        onClick={() => publishPost(result.account, result.output, idx)}
+                                        disabled={result.publishing}
+                                        className="text-xs bg-primary text-on-secondary hover:bg-primary-fixed-dim disabled:bg-surface-container-high disabled:text-on-surface-variant/50 px-4 py-2 rounded-lg font-bold transition-all flex items-center gap-2 w-fit active:scale-95"
+                                      >
+                                        <span className="material-symbols-outlined text-sm">
+                                          {result.publishing ? 'hourglass_empty' : 'send'}
+                                        </span>
+                                        {result.publishing ? 'Publishing...' : 'Publish to Facebook'}
+                                      </button>
+                                    )}
+                                  </div>
                                 )}
                               </div>
 

@@ -35,6 +35,7 @@ func newServer(engine Generator, templatesDir string, token string) http.Handler
 	mux.HandleFunc("/generate", srv.handleGenerate)
 	mux.HandleFunc("/generate/stream", srv.handleGenerateStream)
 	mux.HandleFunc("/generate/link", srv.handleGenerateLink)
+	mux.HandleFunc("/publish", srv.handlePublish)
 	mux.HandleFunc("/templates", srv.handleTemplates)
 	mux.HandleFunc("/templates/", srv.handleTemplateByName)
 	mux.Handle("/", http.FileServer(http.FS(postgenWeb.FS)))
@@ -567,4 +568,46 @@ func (s server) handleGenerateLink(w http.ResponseWriter, r *http.Request) {
 	tagged := utils.AddAffiliateTag(normalized, req.Tag)
 
 	writeJSON(w, http.StatusOK, affiliateLinkResponse{AffiliateURL: tagged})
+}
+
+type publishRequest struct {
+	Account string `json:"account"`
+	Content string `json:"content"`
+}
+
+type publishResponse struct {
+	PublishID string `json:"publish_id"`
+}
+
+func (s server) handlePublish(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+
+	defer r.Body.Close()
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	var req publishRequest
+	if err := decoder.Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON payload"})
+		return
+	}
+
+	req.Account = strings.TrimSpace(req.Account)
+	req.Content = strings.TrimSpace(req.Content)
+
+	if req.Account == "" || req.Content == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account and content are required"})
+		return
+	}
+
+	pubID, err := s.engine.PublishPost(req.Account, req.Content)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, publishResponse{PublishID: pubID})
 }
