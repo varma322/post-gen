@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"strconv"
 	"text/template"
 	"time"
 
@@ -36,6 +37,7 @@ func newServer(engine Generator, templatesDir string, token string) http.Handler
 	mux.HandleFunc("/generate/stream", srv.handleGenerateStream)
 	mux.HandleFunc("/generate/link", srv.handleGenerateLink)
 	mux.HandleFunc("/publish", srv.handlePublish)
+	mux.HandleFunc("/stats", srv.handleStats)
 	mux.HandleFunc("/templates", srv.handleTemplates)
 	mux.HandleFunc("/templates/", srv.handleTemplateByName)
 	mux.Handle("/", http.FileServer(http.FS(postgenWeb.FS)))
@@ -610,4 +612,26 @@ func (s server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, publishResponse{PublishID: pubID})
+}
+
+func (s server) handleStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+
+	limit := 20
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	stats, err := s.engine.GetStats(r.Context(), limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to retrieve stats"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, stats)
 }

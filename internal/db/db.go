@@ -79,6 +79,20 @@ func (p *Pool) migrate(ctx context.Context) error {
 	CREATE TRIGGER update_accounts_updated_at
 		BEFORE UPDATE ON accounts
 		FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+	CREATE TABLE IF NOT EXISTS published_posts (
+		id                   SERIAL PRIMARY KEY,
+		account_name         VARCHAR(255) NOT NULL,
+		facebook_page_id     VARCHAR(255) NOT NULL,
+		facebook_post_id     VARCHAR(255) NOT NULL,
+		product_title        TEXT,
+		product_url          TEXT,
+		content              TEXT,
+		created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_published_posts_account_name ON published_posts(account_name);
+	CREATE INDEX IF NOT EXISTS idx_published_posts_created_at ON published_posts(created_at);
 	`
 	_, err := p.pool.Exec(ctx, schema)
 	return err
@@ -179,4 +193,83 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// RecordPublishedPost saves a post publication record.
+func (p *Pool) RecordPublishedPost(ctx context.Context, post models.PublishedPost) error {
+	_, err := p.pool.Exec(ctx, `
+		INSERT INTO published_posts (account_name, facebook_page_id, facebook_post_id, product_title, product_url, content, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`,
+		post.AccountName,
+		post.FacebookPageID,
+		post.FacebookPostID,
+		post.ProductTitle,
+		post.ProductURL,
+		post.Content,
+		post.CreatedAt,
+	)
+	return err
+}
+
+// GetStats returns aggregated stats for the dashboard.
+func (p *Pool) GetStats(ctx context.Context, limit int) (*models.Stats, error) {
+	stats := &models.Stats{
+		AccountStats: []models.AccountStats{},
+		RecentPosts:  []models.PublishedPost{},
+	}
+
+	// 1. Total Posts
+	err := p.pool.QueryRow(ctx, `SELECT COUNT(*) FROM published_posts`).Scan(&stats.TotalPosts)
+	if err != nil {
+		return nil, fmt.Errorf("querying total posts: %w", err)
+	}
+
+	// 2. Posts Today
+	err = p.pool.QueryRow(ctx, `SELECT COUNT(*) FROM published_posts WHERE created_at >= CURRENT_DATE`).Scan(&stats.PostsToday)
+	if err != nil {
+		return nil, fmt.Errorf("querying posts today: %w", err)
+	}
+
+	// 3. Per Account Stats
+	rows, err := p.pool.Query(ctx, `
+		SELECT account_name, COUNT(*), COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE)
+		FROM published_posts
+		GROUP BY account_name
+		ORDER BY account_name ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("querying account stats: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var ast models.AccountStats
+		if err := rows.Scan(&ast.AccountName, &ast.TotalPosts, &ast.PostsToday); err != nil {
+			return nil, fmt.Errorf("scanning account stats: %w", err)
+		}
+		stats.AccountStats = append(stats.AccountStats, ast)
+	}
+
+	// 4. Recent Posts
+	rows2, err := p.pool.Query(ctx, `
+		SELECT id, account_name, facebook_page_id, facebook_post_id, product_title, product_url, content, created_at
+		FROM published_posts
+		ORDER BY created_at DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("querying recent posts: %w", err)
+	}
+	defer rows2.Close()
+
+	for rows2.Next() {
+		var pst models.PublishedPost
+		if err := rows2.Scan(&pst.ID, &pst.AccountName, &pst.FacebookPageID, &pst.FacebookPostID, &pst.ProductTitle, &pst.ProductURL, &pst.Content, &pst.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scanning recent post: %w", err)
+		}
+		stats.RecentPosts = append(stats.RecentPosts, pst)
+	}
+
+	return stats, nil
 }

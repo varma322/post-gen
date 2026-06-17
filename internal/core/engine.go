@@ -11,7 +11,9 @@ import (
 	"post-gen/internal/publisher"
 	"post-gen/internal/scraper"
 	"post-gen/internal/utils"
+	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -213,55 +215,98 @@ func (e *Engine) GeneratePostsWithPublish(ctx context.Context, urls []string, ac
 			continue
 		}
 
-		for _, account := range targetAccounts {
-			productForAccount := *product
-			affiliateLink := utils.AddAffiliateTag(url, account.AffiliateTag)
-			productForAccount.Link = affiliateLink
+		type tempResult struct {
+			index  int
+			result Result
+		}
+		ch := make(chan tempResult, len(targetAccounts))
+		var wg sync.WaitGroup
 
-			// AI enrichment: polishes Title, Features, Tagline, Hashtags etc.
-			// The enriched fields are then fed into each account's unique .tmpl template.
-			// UseAI defaults to true; accounts can opt out by setting UseAI=false.
-			if account.UseAI {
-				enrichCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
-				productForAccount = e.aiEnricher.Enrich(enrichCtx, productForAccount, account)
-				cancel()
-			}
+		for i, account := range targetAccounts {
+			wg.Add(1)
+			go func(index int, acc models.Account) {
+				defer wg.Done()
+				productForAccount := *product
+				affiliateLink := utils.AddAffiliateTag(url, acc.AffiliateTag)
+				productForAccount.Link = affiliateLink
 
-			post, err := e.postGenerator(productForAccount, account.TemplatePath)
-			result := Result{
-				URL:          url,
-				Account:      account.Name,
-				Output:       post,
-				ProductTitle: productForAccount.Title,
-				Product:      productForAccount,
-			}
-			if err != nil {
-				result.Output = ""
-				result.Error = fmt.Sprintf("generating post for %s: %v", account.Name, err)
+				// AI enrichment: polishes Title, Features, Tagline, Hashtags etc.
+				// The enriched fields are then fed into each account's unique .tmpl template.
+				// UseAI defaults to true; accounts can opt out by setting UseAI=false.
+				if acc.UseAI {
+					enrichCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+					productForAccount = e.aiEnricher.Enrich(enrichCtx, productForAccount, acc)
+					cancel()
+				}
+
+				post, err := e.postGenerator(productForAccount, acc.TemplatePath)
+				result := Result{
+					URL:          url,
+					Account:      acc.Name,
+					Output:       post,
+					ProductTitle: productForAccount.Title,
+					Product:      productForAccount,
+				}
+				if err != nil {
+					result.Output = ""
+					result.Error = fmt.Sprintf("generating post for %s: %v", acc.Name, err)
+				}
+				ch <- tempResult{index: index, result: result}
+			}(i, account)
+		}
+
+		wg.Wait()
+		close(ch)
+
+		orderedResults := make([]Result, len(targetAccounts))
+		for item := range ch {
+			orderedResults[item.index] = item.result
+		}
+
+		for _, result := range orderedResults {
+			if result.Error != "" {
 				results = append(results, result)
 				continue
 			}
 
 			// Core Facebook publishing integration
-			if publish && account.FacebookPageID != "" && account.FacebookAccessToken != "" {
-				if publishAttempts > 0 && delayBetweenPosts > 0 {
-					if onCooldown != nil {
-						onCooldown(delayBetweenPosts)
+			if publish {
+				var targetAccount models.Account
+				for _, acc := range targetAccounts {
+					if acc.Name == result.Account {
+						targetAccount = acc
+						break
 					}
-					time.Sleep(delayBetweenPosts)
 				}
-				publishAttempts++
 
-				pubID, pubErr := e.fbPublisher.PublishPagePost(
-					account.FacebookPageID,
-					account.FacebookAccessToken,
-					post,
-				)
+				if targetAccount.FacebookPageID != "" && targetAccount.FacebookAccessToken != "" {
+					if publishAttempts > 0 && delayBetweenPosts > 0 {
+						if onCooldown != nil {
+							onCooldown(delayBetweenPosts)
+						}
+						time.Sleep(delayBetweenPosts)
+					}
+					publishAttempts++
 
-				if pubErr != nil {
-					result.PublishError = pubErr.Error()
-				} else {
-					result.PublishID = pubID
+					pubID, pubErr := e.fbPublisher.PublishPagePost(
+						targetAccount.FacebookPageID,
+						targetAccount.FacebookAccessToken,
+						result.Output,
+					)
+
+					if pubErr != nil {
+						result.PublishError = pubErr.Error()
+					} else {
+						result.PublishID = pubID
+						_ = e.RecordPublishedPost(ctx, models.PublishedPost{
+							AccountName:    targetAccount.Name,
+							FacebookPageID: targetAccount.FacebookPageID,
+							FacebookPostID: pubID,
+							ProductTitle:   result.ProductTitle,
+							ProductURL:     result.URL,
+							Content:        result.Output,
+						})
+					}
 				}
 			}
 
@@ -285,7 +330,39 @@ func (e *Engine) PublishPost(accountName, postText string) (string, error) {
 	if account.FacebookPageID == "" || account.FacebookAccessToken == "" {
 		return "", fmt.Errorf("facebook credentials not configured for account %q", accountName)
 	}
-	return e.fbPublisher.PublishPagePost(account.FacebookPageID, account.FacebookAccessToken, postText)
+	
+	pubID, err := e.fbPublisher.PublishPagePost(account.FacebookPageID, account.FacebookAccessToken, postText)
+	if err != nil {
+		return "", err
+	}
+
+	var productURL string
+	var productTitle string
+	words := strings.Fields(postText)
+	for _, word := range words {
+		if strings.HasPrefix(word, "http://") || strings.HasPrefix(word, "https://") {
+			productURL = word
+			break
+		}
+	}
+	lines := strings.Split(postText, "\n")
+	if len(lines) > 0 {
+		productTitle = strings.TrimSpace(lines[0])
+		if len(productTitle) > 100 {
+			productTitle = productTitle[:100] + "..."
+		}
+	}
+
+	_ = e.RecordPublishedPost(context.Background(), models.PublishedPost{
+		AccountName:    account.Name,
+		FacebookPageID: account.FacebookPageID,
+		FacebookPostID: pubID,
+		ProductTitle:   productTitle,
+		ProductURL:     productURL,
+		Content:        postText,
+	})
+
+	return pubID, nil
 }
 
 func (e *Engine) resolveAccounts(accountNames []string) ([]models.Account, error) {
@@ -320,4 +397,80 @@ func enrichBaseProduct(product *models.Product) {
 	if product.Hashtags == "" {
 		product.Hashtags = defaultHashtags
 	}
+}
+
+// RecordPublishedPost logs a successful publish to the database or JSON fallback.
+func (e *Engine) RecordPublishedPost(ctx context.Context, post models.PublishedPost) error {
+	post.CreatedAt = time.Now()
+	if e.db != nil {
+		return e.db.RecordPublishedPost(ctx, post)
+	}
+
+	// JSON fallback
+	posts, err := config.LoadPosts(e.paths.PostsPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("loading posts: %w", err)
+	}
+	posts = append(posts, post)
+	if err := config.SavePosts(e.paths.PostsPath, posts); err != nil {
+		return fmt.Errorf("saving posts: %w", err)
+	}
+	return nil
+}
+
+// GetStats retrieves the aggregated statistics and recent posts log.
+func (e *Engine) GetStats(ctx context.Context, limit int) (*models.Stats, error) {
+	if e.db != nil {
+		return e.db.GetStats(ctx, limit)
+	}
+
+	// JSON fallback
+	posts, err := config.LoadPosts(e.paths.PostsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &models.Stats{AccountStats: []models.AccountStats{}, RecentPosts: []models.PublishedPost{}}, nil
+		}
+		return nil, fmt.Errorf("loading posts: %w", err)
+	}
+
+	stats := &models.Stats{
+		AccountStats: []models.AccountStats{},
+		RecentPosts:  []models.PublishedPost{},
+	}
+
+	stats.TotalPosts = len(posts)
+
+	today := time.Now().Truncate(24 * time.Hour)
+	postsTodayCount := 0
+
+	accTotal := make(map[string]int)
+	accToday := make(map[string]int)
+
+	for _, p := range posts {
+		if p.CreatedAt.After(today) || p.CreatedAt.Equal(today) {
+			postsTodayCount++
+			accToday[p.AccountName]++
+		}
+		accTotal[p.AccountName]++
+	}
+
+	stats.PostsToday = postsTodayCount
+
+	for name, total := range accTotal {
+		stats.AccountStats = append(stats.AccountStats, models.AccountStats{
+			AccountName: name,
+			TotalPosts:  total,
+			PostsToday:  accToday[name],
+		})
+	}
+
+	recentLimit := limit
+	if len(posts) < recentLimit {
+		recentLimit = len(posts)
+	}
+	for i := 0; i < recentLimit; i++ {
+		stats.RecentPosts = append(stats.RecentPosts, posts[len(posts)-1-i])
+	}
+
+	return stats, nil
 }

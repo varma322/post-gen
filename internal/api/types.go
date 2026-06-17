@@ -17,6 +17,7 @@ type Generator interface {
 	SaveAccounts(accounts []models.Account) error
 	DeleteAccount(name string) error
 	Paths() core.Paths
+	GetStats(ctx context.Context, limit int) (*models.Stats, error)
 }
 
 type generateRequest struct {

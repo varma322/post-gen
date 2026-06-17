@@ -11,6 +11,7 @@ type Paths struct {
 	AccountsPath  string
 	SelectorsPath string
 	OutputDir     string
+	PostsPath     string
 }
 
 // DefaultPaths returns the current filesystem layout used by the CLI.
@@ -19,6 +20,7 @@ func DefaultPaths() Paths {
 		AccountsPath:  "accounts.json",
 		SelectorsPath: "selectors.json",
 		OutputDir:     "output",
+		PostsPath:     "posts.json",
 	}
 }
 

@@ -47,3 +47,33 @@ func SaveAccounts(path string, accounts []models.Account) error {
 
 	return nil
 }
+
+// LoadPosts loads the post records from posts.json.
+func LoadPosts(path string) ([]models.PublishedPost, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var posts []models.PublishedPost
+	err = json.Unmarshal(data, &posts)
+	if err != nil {
+		return nil, err
+	}
+
+	return posts, nil
+}
+
+// SavePosts saves the post records to posts.json.
+func SavePosts(path string, posts []models.PublishedPost) error {
+	data, err := json.MarshalIndent(posts, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal posts: %w", err)
+	}
+
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("failed to save posts: %w", err)
+	}
+
+	return nil
+}
