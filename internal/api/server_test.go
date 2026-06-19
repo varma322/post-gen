@@ -62,6 +62,34 @@ func (s stubGenerator) Paths() core.Paths {
 	return core.Paths{}
 }
 
+func (s stubGenerator) AddQueuedProduct(ctx context.Context, url string) error {
+	return nil
+}
+
+func (s stubGenerator) GetQueuedProducts(ctx context.Context) ([]models.QueuedProduct, error) {
+	return nil, nil
+}
+
+func (s stubGenerator) DeleteQueuedProduct(ctx context.Context, id int) error {
+	return nil
+}
+
+func (s stubGenerator) TriggerAutoPostJob(ctx context.Context) (int, error) {
+	return 0, nil
+}
+
+func (s stubGenerator) GetActiveJob(ctx context.Context) (*models.PublicationJob, error) {
+	return nil, nil
+}
+
+func (s stubGenerator) CancelActiveJobs(ctx context.Context) error {
+	return nil
+}
+
+func (s stubGenerator) GetStats(ctx context.Context, limit int) (*models.Stats, error) {
+	return &models.Stats{}, nil
+}
+
 
 func TestHandleGenerateReturnsResults(t *testing.T) {
 	handler := NewServer(stubGenerator{

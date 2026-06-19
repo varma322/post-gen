@@ -359,3 +359,37 @@ func TestGeneratePostsSkipsOutOfStock(t *testing.T) {
 	}
 }
 
+func TestQueueAndAutoPostRequiresDatabase(t *testing.T) {
+	engine := Engine{db: nil}
+
+	err := engine.AddQueuedProduct(context.Background(), "https://amazon.in/dp/B0D1234567")
+	if err == nil || !strings.Contains(err.Error(), "database required") {
+		t.Fatalf("expected database required error, got %v", err)
+	}
+
+	_, err = engine.GetQueuedProducts(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "database required") {
+		t.Fatalf("expected database required error, got %v", err)
+	}
+
+	err = engine.DeleteQueuedProduct(context.Background(), 1)
+	if err == nil || !strings.Contains(err.Error(), "database required") {
+		t.Fatalf("expected database required error, got %v", err)
+	}
+
+	_, err = engine.TriggerAutoPostJob(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "database required") {
+		t.Fatalf("expected database required error, got %v", err)
+	}
+
+	_, err = engine.GetActiveJob(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "database required") {
+		t.Fatalf("expected database required error, got %v", err)
+	}
+
+	err = engine.CancelActiveJobs(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "database required") {
+		t.Fatalf("expected database required error, got %v", err)
+	}
+}
+

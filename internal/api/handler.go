@@ -40,6 +40,11 @@ func newServer(engine Generator, templatesDir string, token string) http.Handler
 	mux.HandleFunc("/stats", srv.handleStats)
 	mux.HandleFunc("/templates", srv.handleTemplates)
 	mux.HandleFunc("/templates/", srv.handleTemplateByName)
+	mux.HandleFunc("/products", srv.handleProducts)
+	mux.HandleFunc("/products/", srv.handleProductByID)
+	mux.HandleFunc("/jobs", srv.handleJobs)
+	mux.HandleFunc("/jobs/active", srv.handleJobsActive)
+	mux.HandleFunc("/jobs/cancel", srv.handleJobsCancel)
 	mux.Handle("/", http.FileServer(http.FS(postgenWeb.FS)))
 
 	// Protect all routes except /health and static frontend files with Bearer token auth.
@@ -634,4 +639,104 @@ func (s server) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, stats)
+}
+
+type productQueueRequest struct {
+	URL string `json:"url"`
+}
+
+func (s server) handleProducts(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		products, err := s.engine.GetQueuedProducts(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"products": products})
+	case http.MethodPost:
+		defer r.Body.Close()
+		var req productQueueRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON payload"})
+			return
+		}
+		req.URL = strings.TrimSpace(req.URL)
+		if req.URL == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "url is required"})
+			return
+		}
+		if err := s.engine.AddQueuedProduct(r.Context(), req.URL); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{"status": "queued"})
+	default:
+		methodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
+	}
+}
+
+func (s server) handleProductByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		methodNotAllowed(w, http.MethodDelete)
+		return
+	}
+
+	idStr := strings.TrimPrefix(r.URL.Path, "/products/")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid product id"})
+		return
+	}
+
+	if err := s.engine.DeleteQueuedProduct(r.Context(), id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (s server) handleJobs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+
+	jobID, err := s.engine.TriggerAutoPostJob(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"job_id": jobID, "status": "started"})
+}
+
+func (s server) handleJobsActive(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+
+	job, err := s.engine.GetActiveJob(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"active": false})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"active": true, "job": job})
+}
+
+func (s server) handleJobsCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+
+	if err := s.engine.CancelActiveJobs(r.Context()); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
 }

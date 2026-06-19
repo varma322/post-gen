@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 
@@ -45,6 +46,12 @@ func main() {
 	engine, err := core.NewEngine(paths, dbPool)
 	if err != nil {
 		log.Fatalf("[ERR] Bootstrapping engine: %v", err)
+	}
+
+	// Start background publication worker if PostgreSQL is connected
+	if dbPool != nil {
+		worker := core.NewWorker(engine, 15*time.Minute)
+		worker.Start()
 	}
 
 	if token == "" {

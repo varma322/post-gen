@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"log"
 	"post-gen/internal/ai"
 	"post-gen/internal/config"
 	"post-gen/internal/db"
@@ -473,4 +474,124 @@ func (e *Engine) GetStats(ctx context.Context, limit int) (*models.Stats, error)
 	}
 
 	return stats, nil
+}
+
+// AddQueuedProduct scrapes the URL, fetches its metadata, and queues it.
+func (e *Engine) AddQueuedProduct(ctx context.Context, url string) error {
+	if e.db == nil {
+		return fmt.Errorf("database required for product queue")
+	}
+
+	urlNormalized := utils.NormalizeURL(url)
+	if !scraper.IsValidURL(urlNormalized) {
+		return fmt.Errorf("invalid URL format: %s", urlNormalized)
+	}
+
+	s, err := e.scraperFactory(urlNormalized, e.selectors)
+	if err != nil {
+		return fmt.Errorf("creating scraper: %w", err)
+	}
+
+	product, err := s.Scrape(ctx, urlNormalized)
+	if err != nil {
+		return fmt.Errorf("scraping product: %w", err)
+	}
+
+	// Queue it in the database
+	return e.db.AddQueuedProduct(ctx, urlNormalized, product.Title, product.DealPrice, product.MRP, *product)
+}
+
+// GetQueuedProducts retrieves all active queued products.
+func (e *Engine) GetQueuedProducts(ctx context.Context) ([]models.QueuedProduct, error) {
+	if e.db == nil {
+		return nil, fmt.Errorf("database required for product queue")
+	}
+	return e.db.GetQueuedProducts(ctx)
+}
+
+// DeleteQueuedProduct deletes a product from the queue.
+func (e *Engine) DeleteQueuedProduct(ctx context.Context, id int) error {
+	if e.db == nil {
+		return fmt.Errorf("database required for product queue")
+	}
+	return e.db.DeleteQueuedProduct(ctx, id)
+}
+
+// TriggerAutoPostJob selects random unposted products for each active account and creates a job.
+func (e *Engine) TriggerAutoPostJob(ctx context.Context) (int, error) {
+	if e.db == nil {
+		return 0, fmt.Errorf("database required for auto post jobs")
+	}
+
+	// 1. Check if there is already an active job running/pending
+	activeJob, err := e.db.GetActiveJob(ctx)
+	if err == nil && activeJob != nil {
+		return 0, fmt.Errorf("an active auto-post job (ID: %d) is already running", activeJob.ID)
+	}
+
+	// 2. Fetch all configured accounts
+	accounts := e.Accounts()
+	if len(accounts) == 0 {
+		return 0, fmt.Errorf("no configured accounts found")
+	}
+
+	// 3. Build job items
+	var jobItems []models.JobItem
+	usedURLs := make(map[string]bool)
+
+	for _, acc := range accounts {
+		// Get candidates that haven't been posted to this account yet
+		candidates, err := e.db.GetCandidateProductsForAccount(ctx, acc.Name)
+		if err != nil {
+			log.Printf("[WARN] Failed to get candidates for account %s: %v", acc.Name, err)
+			continue
+		}
+
+		// Pick a candidate that hasn't been used in this job run yet
+		var selected *models.QueuedProduct
+		for i := range candidates {
+			if !usedURLs[candidates[i].URL] {
+				selected = &candidates[i]
+				break
+			}
+		}
+
+		// If all candidates are used in this run, allow duplicate across accounts for this run
+		if selected == nil && len(candidates) > 0 {
+			selected = &candidates[0]
+		}
+
+		if selected != nil {
+			usedURLs[selected.URL] = true
+			jobItems = append(jobItems, models.JobItem{
+				AccountName: acc.Name,
+				ProductURL:  selected.URL,
+			})
+		} else {
+			log.Printf("[INFO] Skipping account %s: no unposted products available in queue", acc.Name)
+		}
+	}
+
+	if len(jobItems) == 0 {
+		return 0, fmt.Errorf("no unposted products available in queue for any account")
+	}
+
+	// 4. Create the job in the database
+	return e.db.CreatePublicationJob(ctx, jobItems)
+}
+
+// GetActiveJob retrieves current active job status
+func (e *Engine) GetActiveJob(ctx context.Context) (*models.PublicationJob, error) {
+	if e.db == nil {
+		return nil, fmt.Errorf("database required for auto post jobs")
+	}
+	return e.db.GetActiveJob(ctx)
+}
+
+// CancelActiveJobs cancels the currently running job
+func (e *Engine) CancelActiveJobs(ctx context.Context) error {
+	if e.db == nil {
+		return fmt.Errorf("database required for auto post jobs")
+	}
+	return e.db.CancelActiveJobs(ctx)
 }

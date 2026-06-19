@@ -41,6 +41,134 @@ export default function App() {
   const [statsLoading, setStatsLoading] = useState(false);
   const [statsError, setStatsError] = useState('');
 
+  // Auto-Publisher state
+  const [queuedProducts, setQueuedProducts] = useState([]);
+  const [queueLoading, setQueueLoading] = useState(false);
+  const [newUrls, setNewUrls] = useState('');
+  const [activeJob, setActiveJob] = useState(null);
+
+  // Poll active job status when tab is active
+  useEffect(() => {
+    let intervalId = null;
+
+    const checkActiveJob = async () => {
+      try {
+        const resp = await apiFetch("/jobs/active");
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.active) {
+            setActiveJob(data.job);
+          } else {
+            setActiveJob(null);
+          }
+        }
+      } catch (err) {
+        console.error("Error polling active job:", err);
+      }
+    };
+
+    if (activeTab === 'autopublish') {
+      checkActiveJob();
+      loadQueuedProducts();
+      intervalId = setInterval(checkActiveJob, 8000);
+    }
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [activeTab]);
+
+  const loadQueuedProducts = async () => {
+    setQueueLoading(true);
+    try {
+      const resp = await apiFetch("/products");
+      if (resp.ok) {
+        const data = await resp.json();
+        setQueuedProducts(data.products || []);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setQueueLoading(false);
+    }
+  };
+
+  const handleQueueUrls = async () => {
+    const parsed = newUrls.split(/\r?\n/).map(u => u.trim()).filter(Boolean);
+    if (parsed.length === 0) return;
+
+    setStatusMessage(`Adding ${parsed.length} items to pool...`);
+    setNewUrls('');
+    
+    for (const url of parsed) {
+      try {
+        const resp = await apiFetch("/products", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url })
+        });
+        if (!resp.ok) {
+          const data = await resp.json();
+          console.error(data.error);
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    
+    setStatusMessage("Done queuing products.");
+    loadQueuedProducts();
+    setTimeout(() => setStatusMessage(""), 2000);
+  };
+
+  const handleDeleteQueuedProduct = async (id) => {
+    try {
+      const resp = await apiFetch(`/products/${id}`, { method: "DELETE" });
+      if (resp.ok) {
+        loadQueuedProducts();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleTriggerAutoPost = async () => {
+    try {
+      const resp = await apiFetch("/jobs", { method: "POST" });
+      if (resp.ok) {
+        const data = await resp.json();
+        setStatusMessage(`Auto-post job triggered!`);
+        setTimeout(() => setStatusMessage(""), 3000);
+        const activeResp = await apiFetch("/jobs/active");
+        if (activeResp.ok) {
+          const activeData = await activeResp.json();
+          if (activeData.active) {
+            setActiveJob(activeData.job);
+          }
+        }
+      } else {
+        const data = await resp.json();
+        alert(data.error || "Failed to trigger auto post");
+      }
+    } catch (err) {
+      alert("Error: " + err.message);
+    }
+  };
+
+  const handleCancelAutoPost = async () => {
+    if (!confirm("Are you sure you want to cancel the active posting job?")) return;
+    try {
+      const resp = await apiFetch("/jobs/cancel", { method: "POST" });
+      if (resp.ok) {
+        setActiveJob(null);
+        setStatusMessage("Job cancelled.");
+        setTimeout(() => setStatusMessage(""), 2000);
+      }
+    } catch (err) {
+      alert("Error: " + err.message);
+    }
+  };
+
   const cooldownIntervalRef = useRef(null);
 
   // Helper for API fetches with Bearer Token auth
@@ -474,6 +602,13 @@ export default function App() {
             >
               <span className="material-symbols-outlined">rocket_launch</span>
               Generator
+            </button>
+            <button 
+              onClick={() => { setActiveTab('autopublish'); setMobileMenuOpen(false); }}
+              className={`w-full text-left rounded-lg px-4 py-3 flex items-center gap-3 duration-200 ease-in-out font-label font-medium text-label-large ${activeTab === 'autopublish' ? 'bg-secondary-container text-on-secondary-container border border-primary/20 shadow-md' : 'text-on-surface-variant hover:bg-surface-container-highest hover:text-on-surface'}`}
+            >
+              <span className="material-symbols-outlined">schedule</span>
+              Auto-Publisher
             </button>
             <button 
               onClick={() => { setActiveTab('stats'); setMobileMenuOpen(false); }}
@@ -1196,6 +1331,195 @@ export default function App() {
                       </div>
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* TAB 5: AUTO-PUBLISHER */}
+              {activeTab === 'autopublish' && (
+                <div className="space-y-8 animate-fadeIn">
+                  
+                  {/* Header */}
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-outline-variant pb-6">
+                    <div>
+                      <h1 className="text-3xl font-headline font-bold text-on-surface">Auto-Publisher</h1>
+                      <p className="text-on-surface-variant mt-1 font-body">Queue product listings in a central pool and auto-distribute them to all active Facebook pages.</p>
+                    </div>
+                  </div>
+
+                  {/* Top Stats & Actions */}
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div className="lg:col-span-2 bg-surface-container rounded-xl border border-outline-variant p-6 shadow-sm flex flex-col justify-between">
+                      <div>
+                        <div className="flex items-center gap-2 mb-4">
+                          <span className="material-symbols-outlined text-primary">add_to_photos</span>
+                          <h2 className="text-xl font-headline font-semibold text-on-surface">Queue Products to Pool</h2>
+                        </div>
+                        <textarea 
+                          value={newUrls}
+                          onChange={(e) => setNewUrls(e.target.value)}
+                          className="w-full h-32 bg-surface-variant border border-outline-variant rounded-lg p-4 text-on-surface placeholder:text-on-surface-variant/40 focus:ring-2 focus:ring-primary focus:border-transparent transition-all resize-none font-mono text-sm leading-relaxed" 
+                          placeholder="Paste Amazon product URLs here... One per line."
+                        />
+                      </div>
+                      <div className="mt-4 flex gap-3">
+                        <button 
+                          onClick={handleQueueUrls}
+                          className="bg-primary text-on-secondary hover:bg-primary-fixed-dim px-6 py-3 rounded-lg font-label font-bold transition-colors shadow-lg flex items-center gap-2"
+                        >
+                          <span className="material-symbols-outlined text-lg">queue</span>
+                          Queue URLs
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Auto post control panel */}
+                    <div className="bg-surface-container rounded-xl border border-outline-variant p-6 shadow-sm flex flex-col justify-between">
+                      <div>
+                        <div className="flex items-center gap-2 mb-4">
+                          <span className="material-symbols-outlined text-primary">smart_toy</span>
+                          <h2 className="text-xl font-headline font-semibold text-on-surface">Scheduler Control</h2>
+                        </div>
+                        <p className="text-xs text-on-surface-variant mb-4 leading-relaxed">
+                          Triggering a job will randomly assign a unique unposted product from the pool to each active Facebook page and post them sequentially with a 15-minute delay.
+                        </p>
+                        <div className="space-y-2 text-xs font-semibold bg-surface-variant/50 p-3 rounded-lg border border-outline-variant">
+                          <div className="flex justify-between">
+                            <span>Queued Items:</span>
+                            <span className="text-primary">{queuedProducts.length}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Active Pages:</span>
+                            <span className="text-primary">{accounts.length}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-6 flex flex-col gap-2">
+                        {activeJob ? (
+                          <button 
+                            onClick={handleCancelAutoPost}
+                            className="w-full bg-red-950/20 hover:bg-red-950/40 border border-red-900/40 text-red-200 px-5 py-3 rounded-lg font-bold text-sm transition-all flex items-center justify-center gap-2"
+                          >
+                            <span className="material-symbols-outlined text-base">cancel</span>
+                            Cancel Active Job
+                          </button>
+                        ) : (
+                          <button 
+                            onClick={handleTriggerAutoPost}
+                            disabled={queuedProducts.length === 0}
+                            className="w-full bg-primary text-on-secondary hover:bg-primary-fixed-dim disabled:bg-surface-container-high disabled:text-on-surface-variant/50 px-5 py-3 rounded-lg font-bold text-sm transition-all flex items-center justify-center gap-2 shadow-lg"
+                          >
+                            <span className="material-symbols-outlined text-base">play_arrow</span>
+                            Start Auto-Post Job
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Active Job Progress */}
+                  {activeJob && (
+                    <div className="bg-surface-container rounded-xl border border-primary/30 p-6 shadow-md space-y-4 animate-slideDown">
+                      <div className="flex justify-between items-center border-b border-outline-variant pb-3">
+                        <div className="flex items-center gap-2">
+                          <span className="material-symbols-outlined text-primary animate-spin">sync</span>
+                          <h3 className="font-bold text-on-surface text-lg">Active Auto-Post Job (ID: {activeJob.id})</h3>
+                        </div>
+                        <span className="bg-primary/10 text-primary px-3 py-1 rounded-full text-xs font-bold uppercase">
+                          Status: {activeJob.status}
+                        </span>
+                      </div>
+
+                      {/* Progression log */}
+                      <div className="space-y-3">
+                        <span className="text-xs text-on-surface-variant font-semibold uppercase block">Job Progression Table</span>
+                        <div className="overflow-x-auto border border-outline-variant rounded-lg">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="bg-surface-variant text-on-surface-variant font-bold border-b border-outline-variant">
+                                <th className="px-4 py-3">Page Account</th>
+                                <th className="px-4 py-3">Assigned Product Link</th>
+                                <th className="px-4 py-3">Status</th>
+                                <th className="px-4 py-3 text-right">Details</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-outline-variant/60">
+                              {activeJob.items && activeJob.items.map((item, idx) => (
+                                <tr key={idx} className="hover:bg-surface-variant/20 transition-colors">
+                                  <td className="px-4 py-3 font-semibold text-primary">{item.account_name}</td>
+                                  <td className="px-4 py-3 font-mono truncate max-w-[200px]">{item.product_url}</td>
+                                  <td className="px-4 py-3">
+                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                      item.status === 'published' ? 'bg-primary/10 text-primary' :
+                                      item.status === 'publishing' ? 'bg-orange-500/20 text-orange-500 animate-pulse' :
+                                      item.status === 'failed' ? 'bg-red-500/10 text-red-500' :
+                                      item.status === 'skipped' ? 'bg-surface-variant-highest text-on-surface-variant' :
+                                      'bg-surface-variant text-on-surface-variant'
+                                    }`}>
+                                      {item.status}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-3 text-right text-on-surface-variant font-medium">
+                                    {item.error_message || (item.published_at ? new Date(item.published_at).toLocaleTimeString() : '-')}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Queued Products Table/Grid */}
+                  <div className="bg-surface-container rounded-xl border border-outline-variant shadow-sm p-6 space-y-4">
+                    <div className="flex justify-between items-center">
+                      <h2 className="text-xl font-headline font-semibold text-on-surface flex items-center gap-2">
+                        <span className="material-symbols-outlined text-primary">view_list</span>
+                        Current Product Pool ({queuedProducts.length} Items)
+                      </h2>
+                      <button 
+                        onClick={loadQueuedProducts}
+                        className="text-xs text-primary hover:text-primary-fixed-dim font-bold flex items-center gap-1.5"
+                      >
+                        <span className="material-symbols-outlined text-sm">refresh</span>
+                        Refresh Pool
+                      </button>
+                    </div>
+
+                    {queueLoading ? (
+                      <p className="text-center py-6 text-on-surface-variant text-sm">Loading pool...</p>
+                    ) : queuedProducts.length === 0 ? (
+                      <div className="text-center py-12 border border-dashed border-outline-variant bg-surface-variant/20 rounded-lg">
+                        <p className="text-on-surface-variant text-sm">No products currently queued in pool.</p>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {queuedProducts.map((p) => (
+                          <div key={p.id} className="bg-surface-variant/40 border border-outline-variant rounded-xl p-4 flex gap-4 hover:border-outline transition-colors relative group">
+                            <div className="flex-1 min-w-0">
+                              <h4 className="font-semibold text-sm text-on-surface line-clamp-1 mb-1">{p.title}</h4>
+                              <p className="text-xs text-primary font-bold mb-2">Deal Price: {p.price || 'N/A'}</p>
+                              <a 
+                                href={p.url} 
+                                target="_blank" 
+                                rel="noopener noreferrer" 
+                                className="text-[11px] text-on-surface-variant hover:underline font-mono truncate block max-w-[280px]"
+                              >
+                                {p.url}
+                              </a>
+                            </div>
+                            <button 
+                              onClick={() => handleDeleteQueuedProduct(p.id)}
+                              className="text-error bg-red-950/15 hover:bg-red-950/30 p-2 rounded-lg border border-red-900/20 opacity-0 group-hover:opacity-100 transition-opacity duration-200 w-fit h-fit self-center"
+                              title="Remove from pool"
+                            >
+                              <span className="material-symbols-outlined text-sm">delete</span>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 

@@ -18,6 +18,12 @@ type Generator interface {
 	DeleteAccount(name string) error
 	Paths() core.Paths
 	GetStats(ctx context.Context, limit int) (*models.Stats, error)
+	AddQueuedProduct(ctx context.Context, url string) error
+	GetQueuedProducts(ctx context.Context) ([]models.QueuedProduct, error)
+	DeleteQueuedProduct(ctx context.Context, id int) error
+	TriggerAutoPostJob(ctx context.Context) (int, error)
+	GetActiveJob(ctx context.Context) (*models.PublicationJob, error)
+	CancelActiveJobs(ctx context.Context) error
 }
 
 type generateRequest struct {
