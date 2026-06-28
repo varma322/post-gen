@@ -21,6 +21,26 @@ import (
 
 var asinRegex = regexp.MustCompile(`(?i)/(?:dp|gp/product|gp/aw/d|product)/([a-z0-9]{10})(?:[/?]|$)`)
 
+// Package-level circuit breaker: disables Creators API calls when the account is ineligible.
+var (
+	apiCircuitMu       sync.RWMutex
+	apiCircuitDisabled bool
+	apiCircuitUntil    time.Time
+)
+
+func creatorAPICircuitOpen() bool {
+	apiCircuitMu.RLock()
+	defer apiCircuitMu.RUnlock()
+	return apiCircuitDisabled && time.Now().Before(apiCircuitUntil)
+}
+
+func tripCreatorAPICircuit(d time.Duration) {
+	apiCircuitMu.Lock()
+	defer apiCircuitMu.Unlock()
+	apiCircuitDisabled = true
+	apiCircuitUntil = time.Now().Add(d)
+}
+
 // TokenManager coordinates OAuth2 client credentials token request and thread-safe caching.
 type TokenManager struct {
 	clientID     string
@@ -68,16 +88,36 @@ func (tm *TokenManager) GetToken() (string, error) {
 	data.Set("client_secret", tm.clientSecret)
 	data.Set("scope", "creatorsapi::default")
 
-	req, err := http.NewRequest("POST", tm.tokenURL, strings.NewReader(data.Encode()))
-	if err != nil {
-		return "", fmt.Errorf("creating token request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
+	var resp *http.Response
+	var err error
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	maxRetries := 3
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		req, reqErr := http.NewRequest("POST", tm.tokenURL, strings.NewReader(data.Encode()))
+		if reqErr != nil {
+			return "", fmt.Errorf("creating token request: %w", reqErr)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+		resp, err = client.Do(req)
+		if err == nil {
+			if resp.StatusCode == 429 || resp.StatusCode >= 500 {
+				err = fmt.Errorf("HTTP %d", resp.StatusCode)
+				resp.Body.Close()
+			} else {
+				break
+			}
+		}
+
+		log.Printf("[WARN] Creators API Token request attempt %d/%d failed: %v", attempt, maxRetries, err)
+		if attempt < maxRetries {
+			time.Sleep(time.Duration(attempt*2) * time.Second)
+		}
+	}
+
 	if err != nil {
-		return "", fmt.Errorf("executing token request: %w", err)
+		return "", fmt.Errorf("executing token request after %d attempts: %w", maxRetries, err)
 	}
 	defer resp.Body.Close()
 
@@ -128,6 +168,10 @@ func NewAmazonCreatorAPIScraper(clientID, clientSecret, tokenURL, defaultPartner
 
 // Scrape implements the Scraper interface.
 func (s *AmazonCreatorAPIScraper) Scrape(ctx context.Context, rawURL string) (*models.Product, error) {
+	if creatorAPICircuitOpen() {
+		return s.fallback.Scrape(ctx, rawURL)
+	}
+
 	// First, resolve short URLs
 	resolvedURL := utils.ResolveAmazonShortURL(rawURL)
 
@@ -144,6 +188,15 @@ func (s *AmazonCreatorAPIScraper) Scrape(ctx context.Context, rawURL string) (*m
 	// Fetch from Creators API
 	product, err := s.fetchFromAPI(ctx, asin, marketplace, resolvedURL)
 	if err != nil {
+		if strings.Contains(err.Error(), "AssociateNotEligible") {
+			tripCreatorAPICircuit(1 * time.Hour)
+			log.Printf("[WARN] Creators API: account not eligible (partner tag rejected by Amazon). Disabling API for 1 hour. Update AMAZON_CREATOR_PARTNER_TAG env var to an active Associates account tag.")
+			return s.fallback.Scrape(ctx, rawURL)
+		}
+		if strings.Contains(err.Error(), "after 3 attempts") || strings.Contains(err.Error(), "no such host") || strings.Contains(err.Error(), "timeout") {
+			log.Printf("[ERR] Creators API failed due to network error: %v. Aborting HTML fallback to prevent CAPTCHA.", err)
+			return nil, err
+		}
 		log.Printf("[WARN] Creators API failed: %v. Falling back to HTML scraping.", err)
 		return s.fallback.Scrape(ctx, rawURL)
 	}
@@ -159,7 +212,7 @@ func (s *AmazonCreatorAPIScraper) fetchFromAPI(ctx context.Context, asin, market
 
 	partnerTag := s.defaultPartnerTag
 	if partnerTag == "" {
-		partnerTag = "notyoffers-21" // Default Indian Associates tag as fallback
+		partnerTag = "notyoffers-21"
 	}
 
 	payloadMap := map[string]interface{}{
@@ -180,19 +233,39 @@ func (s *AmazonCreatorAPIScraper) fetchFromAPI(ctx context.Context, asin, market
 	}
 
 	apiURL := "https://creatorsapi.amazon/catalog/v1/getItems"
-	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(payloadBytes))
-	if err != nil {
-		return nil, fmt.Errorf("creating API request: %w", err)
+	
+	var resp *http.Response
+	client := &http.Client{Timeout: 15 * time.Second}
+	maxRetries := 3
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		req, reqErr := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(payloadBytes))
+		if reqErr != nil {
+			return nil, fmt.Errorf("creating API request: %w", reqErr)
+		}
+
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-marketplace", marketplace)
+
+		resp, err = client.Do(req)
+		if err == nil {
+			if resp.StatusCode == 429 || resp.StatusCode >= 500 {
+				err = fmt.Errorf("HTTP %d", resp.StatusCode)
+				resp.Body.Close()
+			} else {
+				break
+			}
+		}
+
+		log.Printf("[WARN] Creators API GetItems request attempt %d/%d failed: %v", attempt, maxRetries, err)
+		if attempt < maxRetries {
+			time.Sleep(time.Duration(attempt*2) * time.Second)
+		}
 	}
 
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-marketplace", marketplace)
-
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("sending API request: %w", err)
+		return nil, fmt.Errorf("sending API request after %d attempts: %w", maxRetries, err)
 	}
 	defer resp.Body.Close()
 

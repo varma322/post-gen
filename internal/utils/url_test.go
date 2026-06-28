@@ -69,8 +69,8 @@ func TestNormalizeURLLeavesNonAmazonURL(t *testing.T) {
 
 func TestAddAffiliateTagAddsWhenMissing(t *testing.T) {
 	base := "https://www.amazon.in/dp/B0F7QR75X2"
-	got := AddAffiliateTag(base, "zonrushdeals-21")
-	want := "https://www.amazon.in/dp/B0F7QR75X2?tag=zonrushdeals-21"
+	got := AddAffiliateTag(base, "zonrushdeals-21", nil)
+	want := "https://www.amazon.in/dp/B0F7QR75X2?th=1&tag=zonrushdeals-21"
 
 	if got != want {
 		t.Fatalf("expected %q, got %q", want, got)
@@ -79,8 +79,8 @@ func TestAddAffiliateTagAddsWhenMissing(t *testing.T) {
 
 func TestAddAffiliateTagOverridesExistingTag(t *testing.T) {
 	base := "https://www.amazon.in/dp/B0F7QR75X2?ref=abc&tag=oldtag-21"
-	got := AddAffiliateTag(base, "newtag-21")
-	want := "https://www.amazon.in/dp/B0F7QR75X2?ref=abc&tag=newtag-21"
+	got := AddAffiliateTag(base, "newtag-21", nil)
+	want := "https://www.amazon.in/dp/B0F7QR75X2?ref=abc&th=1&tag=newtag-21"
 
 	if got != want {
 		t.Fatalf("expected %q, got %q", want, got)
@@ -89,9 +89,19 @@ func TestAddAffiliateTagOverridesExistingTag(t *testing.T) {
 
 func TestAddAffiliateTagLeavesURLWhenTagEmpty(t *testing.T) {
 	base := "https://www.amazon.in/dp/B0F7QR75X2"
-	got := AddAffiliateTag(base, "")
+	got := AddAffiliateTag(base, "", nil)
 
 	if got != base {
 		t.Fatalf("expected unchanged URL %q, got %q", base, got)
+	}
+}
+
+func TestAddAffiliateTagExtraParamsBeforeTag(t *testing.T) {
+	base := "https://www.amazon.in/dp/B0F7QR75X2"
+	got := AddAffiliateTag(base, "hurrydeals06-21", map[string]string{"th": "1"})
+	want := "https://www.amazon.in/dp/B0F7QR75X2?th=1&tag=hurrydeals06-21"
+
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
 	}
 }

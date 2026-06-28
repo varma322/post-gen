@@ -12,5 +12,6 @@ type Account struct {
 	UseAI    bool   `json:"use_ai,omitempty"`
 	// AIPrompt is an optional persona/tone instruction appended to the AI prompt for this account.
 	// e.g. "Write in a casual, emoji-heavy style for a young audience."
-	AIPrompt string `json:"ai_prompt,omitempty"`
+	AIPrompt    string            `json:"ai_prompt,omitempty"`
+	ExtraParams map[string]string `json:"extra_params,omitempty"`
 }

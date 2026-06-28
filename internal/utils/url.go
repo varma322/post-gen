@@ -66,7 +66,8 @@ func ResolveAmazonShortURL(raw string) string {
 
 
 // AddAffiliateTag injects or overrides the affiliate tag query parameter.
-func AddAffiliateTag(raw string, tag string) string {
+// Extra params (e.g. {"th": "1"}) are appended before the tag so the tag always appears last.
+func AddAffiliateTag(raw string, tag string, extra map[string]string) string {
 	if strings.TrimSpace(tag) == "" {
 		return raw
 	}
@@ -76,9 +77,37 @@ func AddAffiliateTag(raw string, tag string) string {
 		return raw
 	}
 
-	query := parsed.Query()
-	query.Set("tag", tag)
-	parsed.RawQuery = query.Encode()
+	// Strip tag and extra keys from existing params so we rebuild them in the right order.
+	existing := parsed.Query()
+	existing.Del("tag")
+	for k := range extra {
+		existing.Del(k)
+	}
 
+	// th=1 is added to all affiliate links before the tag.
+	existing.Del("th")
+
+	var sb strings.Builder
+	if enc := existing.Encode(); enc != "" {
+		sb.WriteString(enc)
+	}
+	for k, v := range extra {
+		if k == "th" {
+			continue // already hardcoded above
+		}
+		if sb.Len() > 0 {
+			sb.WriteByte('&')
+		}
+		sb.WriteString(url.QueryEscape(k))
+		sb.WriteByte('=')
+		sb.WriteString(url.QueryEscape(v))
+	}
+	if sb.Len() > 0 {
+		sb.WriteByte('&')
+	}
+	sb.WriteString("th=1&tag=")
+	sb.WriteString(url.QueryEscape(tag))
+
+	parsed.RawQuery = sb.String()
 	return parsed.String()
 }

@@ -1,0 +1,9 @@
+{{.Title}}
+
+{{range .Features}}{{.}}
+{{end}}
+💥 Price: ₹{{.DealPrice}}{{if .Discount}} ({{.Discount}}% OFF){{end}}
+
+{{.Link}}
+{{if .Tagline}}
+{{.Tagline}}{{end}}

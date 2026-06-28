@@ -572,7 +572,7 @@ func (s server) handleGenerateLink(w http.ResponseWriter, r *http.Request) {
 	normalized := utils.NormalizeAmazonURL(resolved)
 
 	// 4. Append affiliate tag
-	tagged := utils.AddAffiliateTag(normalized, req.Tag)
+	tagged := utils.AddAffiliateTag(normalized, req.Tag, nil)
 
 	writeJSON(w, http.StatusOK, affiliateLinkResponse{AffiliateURL: tagged})
 }

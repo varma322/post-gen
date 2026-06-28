@@ -148,7 +148,7 @@ func (w *Worker) processNextJobItem() {
 	acc := resolvedAccounts[0]
 
 	productForAccount := *product
-	affiliateLink := utils.AddAffiliateTag(nextItem.ProductURL, acc.AffiliateTag)
+	affiliateLink := utils.AddAffiliateTag(nextItem.ProductURL, acc.AffiliateTag, acc.ExtraParams)
 	productForAccount.Link = affiliateLink
 
 	if acc.UseAI {

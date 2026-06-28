@@ -228,7 +228,7 @@ func (e *Engine) GeneratePostsWithPublish(ctx context.Context, urls []string, ac
 			go func(index int, acc models.Account) {
 				defer wg.Done()
 				productForAccount := *product
-				affiliateLink := utils.AddAffiliateTag(url, acc.AffiliateTag)
+				affiliateLink := utils.AddAffiliateTag(url, acc.AffiliateTag, acc.ExtraParams)
 				productForAccount.Link = affiliateLink
 
 				// AI enrichment: polishes Title, Features, Tagline, Hashtags etc.
