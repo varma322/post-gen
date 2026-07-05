@@ -238,7 +238,7 @@ func TestGeneratePostsInjectsAffiliateTagPerAccount(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	want := "https://www.amazon.in/dp/B0F7QR75X2?tag=zonrushdeals-21"
+	want := "https://www.amazon.in/dp/B0F7QR75X2?th=1&tag=zonrushdeals-21"
 	if generatedProduct.Link != want {
 		t.Fatalf("expected injected affiliate tag URL %q, got %q", want, generatedProduct.Link)
 	}

@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"post-gen/internal/ai"
@@ -25,6 +26,10 @@ const (
 
 // Engine orchestrates config loading, scraping, AI enrichment, and template generation.
 type Engine struct {
+	// mu guards accounts, which the background Worker reads continuously for
+	// the life of the process while HTTP account create/update/delete requests
+	// write it via ReloadAccounts.
+	mu             sync.RWMutex
 	accounts       []models.Account
 	selectors      config.Selectors
 	paths          Paths
@@ -96,6 +101,8 @@ func NewEngine(paths Paths, dbPool *db.Pool) (*Engine, error) {
 
 // Accounts exposes the configured account list for callers that need metadata.
 func (e *Engine) Accounts() []models.Account {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	accounts := make([]models.Account, len(e.accounts))
 	copy(accounts, e.accounts)
 	return accounts
@@ -114,14 +121,18 @@ func (e *Engine) ReloadAccounts() error {
 		if err != nil {
 			return fmt.Errorf("reloading accounts from db: %w", err)
 		}
+		e.mu.Lock()
 		e.accounts = accounts
+		e.mu.Unlock()
 		return nil
 	}
 	accounts, err := config.LoadAccounts(e.paths.AccountsPath)
 	if err != nil {
 		return fmt.Errorf("reloading accounts: %w", err)
 	}
+	e.mu.Lock()
 	e.accounts = accounts
+	e.mu.Unlock()
 	return nil
 }
 
@@ -141,7 +152,11 @@ func (e *Engine) DeleteAccount(name string) error {
 		return e.db.DeleteAccount(ctx, name)
 	}
 	// JSON fallback: reload, filter, save
-	accounts := e.accounts
+	e.mu.RLock()
+	accounts := make([]models.Account, len(e.accounts))
+	copy(accounts, e.accounts)
+	e.mu.RUnlock()
+
 	filtered := make([]models.Account, 0, len(accounts))
 	found := false
 	for _, a := range accounts {
@@ -367,14 +382,28 @@ func (e *Engine) PublishPost(accountName, postText string) (string, error) {
 }
 
 func (e *Engine) resolveAccounts(accountNames []string) ([]models.Account, error) {
+	e.mu.RLock()
+	snapshot := make([]models.Account, len(e.accounts))
+	copy(snapshot, e.accounts)
+	e.mu.RUnlock()
+
 	if len(accountNames) == 0 {
-		accounts := make([]models.Account, len(e.accounts))
-		copy(accounts, e.accounts)
-		return accounts, nil
+		// "All accounts" (no explicit selection) implicitly means all active ones.
+		// Explicit by-name resolution below is intentionally not filtered by
+		// Active, so a caller that already knows a specific account name (e.g.
+		// the worker resolving an existing job item's account, or a manual
+		// override) can still resolve it even if it was deactivated afterward.
+		active := make([]models.Account, 0, len(snapshot))
+		for _, a := range snapshot {
+			if a.IsActive() {
+				active = append(active, a)
+			}
+		}
+		return active, nil
 	}
 
-	available := make(map[string]models.Account, len(e.accounts))
-	for _, account := range e.accounts {
+	available := make(map[string]models.Account, len(snapshot))
+	for _, account := range snapshot {
 		available[account.Name] = account
 	}
 
@@ -498,7 +527,7 @@ func (e *Engine) AddQueuedProduct(ctx context.Context, url string) error {
 	}
 
 	// Queue it in the database
-	return e.db.AddQueuedProduct(ctx, urlNormalized, product.Title, product.DealPrice, product.MRP, *product)
+	return e.db.AddQueuedProduct(ctx, urlNormalized, product.Title, product.DealPrice, product.ImageURL, *product)
 }
 
 // GetQueuedProducts retrieves all active queued products.
@@ -523,23 +552,35 @@ func (e *Engine) TriggerAutoPostJob(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("database required for auto post jobs")
 	}
 
-	// 1. Check if there is already an active job running/pending
+	// 1. Fast-path check: reject early with a specific message if a job is
+	// already active. This alone can't close the check-then-act race between
+	// two concurrent requests - the idx_publication_jobs_single_active unique
+	// index enforced by CreatePublicationJob below is the authoritative guard.
 	activeJob, err := e.db.GetActiveJob(ctx)
-	if err == nil && activeJob != nil {
+	if err != nil {
+		return 0, fmt.Errorf("checking active job: %w", err)
+	}
+	if activeJob != nil {
 		return 0, fmt.Errorf("an active auto-post job (ID: %d) is already running", activeJob.ID)
 	}
 
-	// 2. Fetch all configured accounts
+	// 2. Fetch all configured, active accounts
 	accounts := e.Accounts()
-	if len(accounts) == 0 {
-		return 0, fmt.Errorf("no configured accounts found")
+	activeAccounts := make([]models.Account, 0, len(accounts))
+	for _, acc := range accounts {
+		if acc.IsActive() {
+			activeAccounts = append(activeAccounts, acc)
+		}
+	}
+	if len(activeAccounts) == 0 {
+		return 0, fmt.Errorf("no active configured accounts found")
 	}
 
 	// 3. Build job items
 	var jobItems []models.JobItem
 	usedURLs := make(map[string]bool)
 
-	for _, acc := range accounts {
+	for _, acc := range activeAccounts {
 		// Get candidates that haven't been posted to this account yet
 		candidates, err := e.db.GetCandidateProductsForAccount(ctx, acc.Name)
 		if err != nil {
@@ -573,11 +614,18 @@ func (e *Engine) TriggerAutoPostJob(ctx context.Context) (int, error) {
 	}
 
 	if len(jobItems) == 0 {
-		return 0, fmt.Errorf("no unposted products available in queue for any account")
+		return 0, fmt.Errorf("no unposted products available in queue for any active account")
 	}
 
 	// 4. Create the job in the database
-	return e.db.CreatePublicationJob(ctx, jobItems)
+	jobID, err := e.db.CreatePublicationJob(ctx, jobItems)
+	if err != nil {
+		if errors.Is(err, db.ErrJobAlreadyActive) {
+			return 0, fmt.Errorf("an active auto-post job is already running")
+		}
+		return 0, err
+	}
+	return jobID, nil
 }
 
 // GetActiveJob retrieves current active job status

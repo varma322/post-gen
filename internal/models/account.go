@@ -14,4 +14,15 @@ type Account struct {
 	// e.g. "Write in a casual, emoji-heavy style for a young audience."
 	AIPrompt    string            `json:"ai_prompt,omitempty"`
 	ExtraParams map[string]string `json:"extra_params,omitempty"`
+	// Active controls whether this account participates in auto-post candidate
+	// selection and job creation. A nil value (legacy data predating this field,
+	// or a JSON/DB row that never set it) is treated as active for backward
+	// compatibility - use IsActive() rather than reading this field directly.
+	Active *bool `json:"active,omitempty"`
+}
+
+// IsActive reports whether the account should be used for auto-post candidate
+// selection. A nil Active field (never explicitly set) defaults to active.
+func (a Account) IsActive() bool {
+	return a.Active == nil || *a.Active
 }

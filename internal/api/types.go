@@ -38,11 +38,13 @@ type generateResponse struct {
 }
 
 type accountRequest struct {
-	Name                string `json:"name"`
-	TemplatePath        string `json:"template_path"`
-	AffiliateTag        string `json:"affiliate_tag"`
-	FacebookPageID      string `json:"facebook_page_id"`
-	FacebookAccessToken string `json:"facebook_access_token"`
+	Name                string            `json:"name"`
+	TemplatePath        string            `json:"template_path"`
+	AffiliateTag        string            `json:"affiliate_tag"`
+	FacebookPageID      string            `json:"facebook_page_id"`
+	FacebookAccessToken string            `json:"facebook_access_token"`
+	Active              *bool             `json:"active,omitempty"`
+	ExtraParams         map[string]string `json:"extra_params,omitempty"`
 }
 
 type streamProgressPayload struct {

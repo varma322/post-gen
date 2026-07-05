@@ -42,12 +42,25 @@ func (w *Worker) Stop() {
 	w.wg.Wait()
 }
 
+// staleJobItemTimeout bounds how long an item may sit in 'publishing' before
+// the worker assumes it was orphaned by a crash/restart and marks it 'failed'
+// rather than leaving it stuck forever while its job is reported 'completed'.
+const staleJobItemTimeout = 10 * time.Minute
+
 func (w *Worker) run() {
 	defer w.wg.Done()
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	log.Println("[INFO] Auto-Post background worker started.")
+
+	if w.engine.db != nil {
+		if n, err := w.engine.db.RecoverStaleJobItems(context.Background(), staleJobItemTimeout); err != nil {
+			log.Printf("[ERR] Failed to recover stale job items on startup: %v", err)
+		} else if n > 0 {
+			log.Printf("[WARN] Recovered %d job item(s) stuck in 'publishing' from a prior run; marked failed.", n)
+		}
+	}
 
 	for {
 		select {
@@ -82,7 +95,11 @@ func (w *Worker) processNextJobItem() {
 	ctx := context.Background()
 	job, err := w.engine.db.GetActiveJob(ctx)
 	if err != nil {
+		log.Printf("[ERR] Worker: failed to query active job: %v", err)
 		return
+	}
+	if job == nil {
+		return // no active job
 	}
 
 	if job.Status == "pending" {
@@ -167,6 +184,17 @@ func (w *Worker) processNextJobItem() {
 	if acc.FacebookPageID == "" || acc.FacebookAccessToken == "" {
 		errMsg := "Facebook credentials not configured"
 		_ = w.engine.db.UpdateJobItemStatus(ctx, nextItem.ID, "failed", errMsg, nil)
+		return
+	}
+
+	// Re-check for cancellation right before the point of no return: scraping,
+	// AI enrichment, and template generation above can take long enough for a
+	// user to cancel the job in the meantime. CancelActiveJobs flips this item's
+	// DB status but can't interrupt this goroutine directly, so this is the
+	// actual enforcement point - skip the Facebook call entirely if the item
+	// is no longer 'publishing'.
+	if status, statusErr := w.engine.db.GetJobItemStatus(ctx, nextItem.ID); statusErr == nil && status != "publishing" {
+		log.Printf("[INFO] Item %d no longer publishing (status=%s); skipping Facebook publish.", nextItem.ID, status)
 		return
 	}
 

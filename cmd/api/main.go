@@ -22,7 +22,7 @@ func main() {
 		log.Println("[INFO] No .env file found, using system environment variables.")
 	}
 
-	addr := flag.String("addr", ":8080", "Address for HTTP API server")
+	addr := flag.String("addr", ":8088", "Address for HTTP API server")
 	apiToken := flag.String("api-token", "", "Bearer token for API authentication (overrides POSTGEN_API_TOKEN env var)")
 	flag.Parse()
 

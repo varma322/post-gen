@@ -120,6 +120,19 @@ func (a *AmazonScraper) Scrape(ctx context.Context, url string) (*models.Product
 	product.DealPrice = FindFirst(doc, a.Sel.Price, cleanPrice)
 	product.MRP = FindFirst(doc, a.Sel.MRP, cleanPrice)
 
+	// Prefer the highest-resolution image attribute, falling back to src and og:image.
+	if a.Sel.Image != "" {
+		product.ImageURL = FindFirstAttr(doc, a.Sel.Image, "data-old-hires")
+		if product.ImageURL == "" {
+			product.ImageURL = FindFirstAttr(doc, a.Sel.Image, "src")
+		}
+	}
+	if product.ImageURL == "" {
+		if content, ok := doc.Find("meta[property='og:image']").First().Attr("content"); ok {
+			product.ImageURL = strings.TrimSpace(content)
+		}
+	}
+
 	// Fallback title extraction for alternate page layouts.
 	if product.Title == "" {
 		product.Title = FindFirst(doc, "#title, h1#title, h1.a-size-large, title", cleanText)

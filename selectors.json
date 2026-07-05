@@ -3,6 +3,7 @@
     "title": "#productTitle",
     "price": "#corePriceDisplay_desktop_feature_div .a-price-whole, #corePrice_desktop .a-price-whole, .priceToPay .a-price-whole, .apexPriceToPay .a-offscreen",
     "mrp": ".basisPrice .a-offscreen, #corePriceDisplay_desktop_feature_div .basisPrice .a-offscreen, #corePriceDisplay_desktop_feature_div .a-text-price .a-offscreen, .a-text-price .a-offscreen",
-    "features": "#feature-bullets li span.a-list-item"
+    "features": "#feature-bullets li span.a-list-item",
+    "image": "#landingImage, #imgBlkFront, #main-image"
   }
 }

@@ -235,10 +235,10 @@ Write product URLs line-by-line into a text file (e.g. `links.txt`) and process 
 
 Launch the unified API + React user interface server:
 ```powershell
-.\postgen-api.exe --addr :8080
+.\postgen-api.exe --addr :8088
 ```
 
-Once running, navigate to `http://localhost:8080` in your web browser.
+Once running, navigate to `http://localhost:8088` in your web browser.
 
 ### Interactive Dashboard Features
 
@@ -308,8 +308,8 @@ COPY --from=backend-builder /app/accounts.json .
 COPY --from=backend-builder /app/selectors.json .
 COPY --from=backend-builder /app/templates ./templates
 COPY --from=frontend-builder /app/postgen-ui/dist ./web
-EXPOSE 8080
-CMD ["./postgen-api", "--addr", ":8080"]
+EXPOSE 8088
+CMD ["./postgen-api", "--addr", ":8088"]
 ```
 
 ### Run Container
@@ -319,7 +319,7 @@ CMD ["./postgen-api", "--addr", ":8080"]
 docker build -t postgen-app .
 
 # Start the application container
-docker run -p 8080:8080 --name postgen-service postgen-app
+docker run -p 8088:8088 --name postgen-service postgen-app
 ```
 
 ---

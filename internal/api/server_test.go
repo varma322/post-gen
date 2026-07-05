@@ -537,7 +537,7 @@ func TestHandleGenerateLink(t *testing.T) {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	if payload.AffiliateURL != "https://www.amazon.in/dp/B0D1234567?tag=customtag-21" {
+	if payload.AffiliateURL != "https://www.amazon.in/dp/B0D1234567?th=1&tag=customtag-21" {
 		t.Fatalf("unexpected affiliate URL output: %s", payload.AffiliateURL)
 	}
 
@@ -557,7 +557,7 @@ func TestHandleGenerateLink(t *testing.T) {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	if payload2.AffiliateURL != "https://www.amazon.in/dp/B00ICIKIW2?tag=smartbuy016-21" {
+	if payload2.AffiliateURL != "https://www.amazon.in/dp/B00ICIKIW2?th=1&tag=smartbuy016-21" {
 		t.Fatalf("unexpected affiliate URL extracted: %s", payload2.AffiliateURL)
 	}
 

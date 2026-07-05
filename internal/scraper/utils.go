@@ -46,6 +46,25 @@ func FindFirst(doc *goquery.Document, selectors string, cleaner func(string) str
 	return ""
 }
 
+// FindFirstAttr tries multiple comma-separated selectors and returns the first
+// non-empty value of the given attribute.
+func FindFirstAttr(doc *goquery.Document, selectors string, attr string) string {
+	parts := strings.Split(selectors, ",")
+	for _, s := range parts {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if val, ok := doc.Find(s).First().Attr(attr); ok {
+			val = strings.TrimSpace(val)
+			if val != "" {
+				return val
+			}
+		}
+	}
+	return ""
+}
+
 func cleanText(text string) string {
 	text = strings.TrimSpace(text)
 	text = strings.ReplaceAll(text, "\n", " ")

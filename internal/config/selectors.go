@@ -11,6 +11,7 @@ type PlatformSelectors struct {
 	Price    string `json:"price"`
 	MRP      string `json:"mrp"`
 	Features string `json:"features"`
+	Image    string `json:"image"`
 }
 
 // Selectors maps platform names to their respective PlatformSelectors

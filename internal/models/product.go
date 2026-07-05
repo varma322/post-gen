@@ -8,6 +8,7 @@ type Product struct {
 	Discount    string
 	Features    []string
 	Link        string
+	ImageURL    string
 	Headline    string
 	Description string
 	Tagline     string

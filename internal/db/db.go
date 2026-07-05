@@ -3,13 +3,22 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"post-gen/internal/models"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ErrJobAlreadyActive is returned by CreatePublicationJob when a partial unique
+// index rejects the insert because another job is already pending/running.
+// This closes the check-then-act race that an application-level check alone
+// (GetActiveJob then CreatePublicationJob) cannot close.
+var ErrJobAlreadyActive = errors.New("an auto-post job is already active")
 
 // Pool is the shared database connection pool.
 type Pool struct {
@@ -64,9 +73,16 @@ func (p *Pool) migrate(ctx context.Context) error {
 		facebook_access_token TEXT,
 		use_ai               BOOLEAN DEFAULT TRUE,
 		ai_prompt            TEXT,
+		active               BOOLEAN NOT NULL DEFAULT TRUE,
+		extra_params         JSONB,
 		created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		updated_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);
+
+	-- Additive migrations for columns introduced after the initial table creation,
+	-- so existing installs pick them up without losing data.
+	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;
+	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS extra_params JSONB;
 
 	CREATE OR REPLACE FUNCTION update_updated_at_column()
 	RETURNS TRIGGER AS $$
@@ -122,8 +138,25 @@ func (p *Pool) migrate(ctx context.Context) error {
 		status               VARCHAR(50) DEFAULT 'pending',
 		error_message        TEXT,
 		published_at         TIMESTAMP,
-		created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);
+
+	ALTER TABLE job_items ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+	DROP TRIGGER IF EXISTS update_job_items_updated_at ON job_items;
+	CREATE TRIGGER update_job_items_updated_at
+		BEFORE UPDATE ON job_items
+		FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+	-- At most one publication_jobs row may be pending/running at a time. This is
+	-- the real fix for the TriggerAutoPostJob check-then-act race: an in-process
+	-- check (GetActiveJob then INSERT) can't close the window between two
+	-- concurrent requests, but a database constraint is atomic regardless of
+	-- timing or how many server processes share this database.
+	CREATE UNIQUE INDEX IF NOT EXISTS idx_publication_jobs_single_active
+		ON publication_jobs ((1))
+		WHERE status IN ('pending', 'running');
 
 	CREATE INDEX IF NOT EXISTS idx_queued_products_status ON queued_products(status);
 	CREATE INDEX IF NOT EXISTS idx_job_items_job_id ON job_items(job_id);
@@ -136,7 +169,7 @@ func (p *Pool) migrate(ctx context.Context) error {
 // LoadAccounts retrieves all accounts from the database.
 func (p *Pool) LoadAccounts(ctx context.Context) ([]models.Account, error) {
 	rows, err := p.pool.Query(ctx, `
-		SELECT name, template_path, affiliate_tag, facebook_page_id, facebook_access_token, use_ai, ai_prompt
+		SELECT name, template_path, affiliate_tag, facebook_page_id, facebook_access_token, use_ai, ai_prompt, active, extra_params
 		FROM accounts ORDER BY id ASC
 	`)
 	if err != nil {
@@ -147,6 +180,8 @@ func (p *Pool) LoadAccounts(ctx context.Context) ([]models.Account, error) {
 	var accounts []models.Account
 	for rows.Next() {
 		var a models.Account
+		var active bool
+		var extraParamsJSON []byte
 		if err := rows.Scan(
 			&a.Name,
 			&a.TemplatePath,
@@ -155,8 +190,16 @@ func (p *Pool) LoadAccounts(ctx context.Context) ([]models.Account, error) {
 			&a.FacebookAccessToken,
 			&a.UseAI,
 			&a.AIPrompt,
+			&active,
+			&extraParamsJSON,
 		); err != nil {
 			return nil, fmt.Errorf("scanning account row: %w", err)
+		}
+		a.Active = &active
+		if len(extraParamsJSON) > 0 {
+			if err := json.Unmarshal(extraParamsJSON, &a.ExtraParams); err != nil {
+				return nil, fmt.Errorf("unmarshaling extra_params for account %q: %w", a.Name, err)
+			}
 		}
 		accounts = append(accounts, a)
 	}
@@ -165,20 +208,31 @@ func (p *Pool) LoadAccounts(ctx context.Context) ([]models.Account, error) {
 
 // UpsertAccount inserts or updates an account by name.
 func (p *Pool) UpsertAccount(ctx context.Context, a models.Account) error {
+	var extraParamsJSON []byte
+	if len(a.ExtraParams) > 0 {
+		var err error
+		extraParamsJSON, err = json.Marshal(a.ExtraParams)
+		if err != nil {
+			return fmt.Errorf("marshaling extra_params for account %q: %w", a.Name, err)
+		}
+	}
+
 	_, err := p.pool.Exec(ctx, `
-		INSERT INTO accounts (name, template_path, affiliate_tag, facebook_page_id, facebook_access_token, use_ai, ai_prompt)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO accounts (name, template_path, affiliate_tag, facebook_page_id, facebook_access_token, use_ai, ai_prompt, active, extra_params)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (name) DO UPDATE SET
 			template_path        = EXCLUDED.template_path,
 			affiliate_tag        = EXCLUDED.affiliate_tag,
 			facebook_page_id     = EXCLUDED.facebook_page_id,
 			facebook_access_token = EXCLUDED.facebook_access_token,
 			use_ai               = EXCLUDED.use_ai,
-			ai_prompt            = EXCLUDED.ai_prompt
+			ai_prompt            = EXCLUDED.ai_prompt,
+			active               = EXCLUDED.active,
+			extra_params         = EXCLUDED.extra_params
 	`,
 		a.Name, a.TemplatePath, a.AffiliateTag,
 		a.FacebookPageID, a.FacebookAccessToken,
-		a.UseAI, a.AIPrompt,
+		a.UseAI, a.AIPrompt, a.IsActive(), extraParamsJSON,
 	)
 	return err
 }
@@ -365,6 +419,10 @@ func (p *Pool) DeleteQueuedProduct(ctx context.Context, id int) error {
 }
 
 // CreatePublicationJob creates a new publication job and inserts pending job items.
+// Returns ErrJobAlreadyActive if the idx_publication_jobs_single_active partial
+// unique index rejects the insert because another job is already active - this
+// is the authoritative check; any prior application-level GetActiveJob check is
+// just a fast-path for a friendlier error message.
 func (p *Pool) CreatePublicationJob(ctx context.Context, items []models.JobItem) (int, error) {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
@@ -377,6 +435,10 @@ func (p *Pool) CreatePublicationJob(ctx context.Context, items []models.JobItem)
 		INSERT INTO publication_jobs (status) VALUES ('pending') RETURNING id
 	`).Scan(&jobID)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return 0, ErrJobAlreadyActive
+		}
 		return 0, err
 	}
 
@@ -394,6 +456,8 @@ func (p *Pool) CreatePublicationJob(ctx context.Context, items []models.JobItem)
 }
 
 // GetActiveJob retrieves the running or pending publication job with its items.
+// It returns (nil, nil) when no job is active - distinct from (nil, err), which
+// signals a genuine database error. Callers must not conflate the two.
 func (p *Pool) GetActiveJob(ctx context.Context) (*models.PublicationJob, error) {
 	var job models.PublicationJob
 	err := p.pool.QueryRow(ctx, `
@@ -402,7 +466,10 @@ func (p *Pool) GetActiveJob(ctx context.Context) (*models.PublicationJob, error)
 		ORDER BY id DESC LIMIT 1
 	`).Scan(&job.ID, &job.Status, &job.CreatedAt)
 	if err != nil {
-		return nil, err // Can be pgx.ErrNoRows
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
 	}
 
 	rows, err := p.pool.Query(ctx, `
@@ -446,6 +513,10 @@ func (p *Pool) UpdateJobItemStatus(ctx context.Context, itemID int, status, erro
 }
 
 // CancelActiveJobs cancels all currently active (pending or running) jobs.
+// Items already in 'publishing' are also marked 'skipped' here, but that alone
+// doesn't stop a publish already in flight in the worker goroutine - the worker
+// re-checks GetJobItemStatus immediately before its point of no return (the
+// actual Facebook API call) and aborts if it sees this cancellation.
 func (p *Pool) CancelActiveJobs(ctx context.Context) error {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
@@ -462,16 +533,43 @@ func (p *Pool) CancelActiveJobs(ctx context.Context) error {
 		return err
 	}
 
-	// Update pending items to skipped
+	// Update pending and in-flight items to skipped.
 	_, err = tx.Exec(ctx, `
 		UPDATE job_items SET status = 'skipped', error_message = 'Job cancelled by user'
-		WHERE status = 'pending'
+		WHERE status IN ('pending', 'publishing')
 	`)
 	if err != nil {
 		return err
 	}
 
 	return tx.Commit(ctx)
+}
+
+// GetJobItemStatus returns the current status of a job item. The worker uses
+// this to detect if an item was cancelled while its publish was in flight,
+// immediately before committing to the actual Facebook API call.
+func (p *Pool) GetJobItemStatus(ctx context.Context, itemID int) (string, error) {
+	var status string
+	err := p.pool.QueryRow(ctx, `SELECT status FROM job_items WHERE id = $1`, itemID).Scan(&status)
+	return status, err
+}
+
+// RecoverStaleJobItems marks job items stuck in 'publishing' for longer than
+// staleAfter as 'failed'. This handles a worker crash/restart between marking
+// an item 'publishing' and recording its terminal outcome: without this, such
+// an item is never revisited, yet the job it belongs to still gets marked
+// 'completed' once no 'pending' items remain, silently masking whether that
+// item was ever actually posted. Returns the number of items recovered.
+func (p *Pool) RecoverStaleJobItems(ctx context.Context, staleAfter time.Duration) (int64, error) {
+	tag, err := p.pool.Exec(ctx, `
+		UPDATE job_items
+		SET status = 'failed', error_message = 'Recovered: stuck in publishing status after a worker restart; outcome unknown'
+		WHERE status = 'publishing' AND updated_at < $1
+	`, time.Now().Add(-staleAfter))
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // GetCandidateProductsForAccount finds all queued products that have not been posted to the given account.

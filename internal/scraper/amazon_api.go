@@ -21,24 +21,36 @@ import (
 
 var asinRegex = regexp.MustCompile(`(?i)/(?:dp|gp/product|gp/aw/d|product)/([a-z0-9]{10})(?:[/?]|$)`)
 
-// Package-level circuit breaker: disables Creators API calls when the account is ineligible.
+// Sentinel errors used to classify Creators API failures without fragile
+// string-matching on wrapped error text.
 var (
-	apiCircuitMu       sync.RWMutex
-	apiCircuitDisabled bool
-	apiCircuitUntil    time.Time
+	errCreatorsAPIIneligible     = errors.New("creators api: associate not eligible")
+	errCreatorsAPINetworkFailure = errors.New("creators api: network failure")
 )
 
-func creatorAPICircuitOpen() bool {
-	apiCircuitMu.RLock()
-	defer apiCircuitMu.RUnlock()
-	return apiCircuitDisabled && time.Now().Before(apiCircuitUntil)
+// Circuit breaker: disables Creators API calls per partner-tag/marketplace pair
+// when that pair is reported ineligible, so one ineligible combination doesn't
+// disable the API for every other account/marketplace sharing the process.
+var (
+	apiCircuitMu    sync.RWMutex
+	apiCircuitUntil = make(map[string]time.Time)
+)
+
+func circuitKey(partnerTag, marketplace string) string {
+	return partnerTag + "|" + marketplace
 }
 
-func tripCreatorAPICircuit(d time.Duration) {
+func creatorAPICircuitOpen(partnerTag, marketplace string) bool {
+	apiCircuitMu.RLock()
+	defer apiCircuitMu.RUnlock()
+	until, ok := apiCircuitUntil[circuitKey(partnerTag, marketplace)]
+	return ok && time.Now().Before(until)
+}
+
+func tripCreatorAPICircuit(partnerTag, marketplace string, d time.Duration) {
 	apiCircuitMu.Lock()
 	defer apiCircuitMu.Unlock()
-	apiCircuitDisabled = true
-	apiCircuitUntil = time.Now().Add(d)
+	apiCircuitUntil[circuitKey(partnerTag, marketplace)] = time.Now().Add(d)
 }
 
 // TokenManager coordinates OAuth2 client credentials token request and thread-safe caching.
@@ -103,8 +115,9 @@ func (tm *TokenManager) GetToken() (string, error) {
 		resp, err = client.Do(req)
 		if err == nil {
 			if resp.StatusCode == 429 || resp.StatusCode >= 500 {
-				err = fmt.Errorf("HTTP %d", resp.StatusCode)
+				snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 				resp.Body.Close()
+				err = fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
 			} else {
 				break
 			}
@@ -166,14 +179,26 @@ func NewAmazonCreatorAPIScraper(clientID, clientSecret, tokenURL, defaultPartner
 	}
 }
 
+// effectivePartnerTag returns the configured partner tag, or the hardcoded
+// default Indian Associates tag if none was configured.
+func (s *AmazonCreatorAPIScraper) effectivePartnerTag() string {
+	if s.defaultPartnerTag != "" {
+		return s.defaultPartnerTag
+	}
+	return "notyoffers-21"
+}
+
 // Scrape implements the Scraper interface.
 func (s *AmazonCreatorAPIScraper) Scrape(ctx context.Context, rawURL string) (*models.Product, error) {
-	if creatorAPICircuitOpen() {
+	// Resolve short URLs first so the marketplace (used to scope the circuit
+	// breaker below) can be determined.
+	resolvedURL := utils.ResolveAmazonShortURL(rawURL)
+	marketplace := getMarketplace(resolvedURL)
+	partnerTag := s.effectivePartnerTag()
+
+	if creatorAPICircuitOpen(partnerTag, marketplace) {
 		return s.fallback.Scrape(ctx, rawURL)
 	}
-
-	// First, resolve short URLs
-	resolvedURL := utils.ResolveAmazonShortURL(rawURL)
 
 	// Extract ASIN
 	asin := extractASIN(resolvedURL)
@@ -182,18 +207,15 @@ func (s *AmazonCreatorAPIScraper) Scrape(ctx context.Context, rawURL string) (*m
 		return s.fallback.Scrape(ctx, rawURL)
 	}
 
-	// Extract marketplace
-	marketplace := getMarketplace(resolvedURL)
-
 	// Fetch from Creators API
 	product, err := s.fetchFromAPI(ctx, asin, marketplace, resolvedURL)
 	if err != nil {
-		if strings.Contains(err.Error(), "AssociateNotEligible") {
-			tripCreatorAPICircuit(1 * time.Hour)
-			log.Printf("[WARN] Creators API: account not eligible (partner tag rejected by Amazon). Disabling API for 1 hour. Update AMAZON_CREATOR_PARTNER_TAG env var to an active Associates account tag.")
+		if errors.Is(err, errCreatorsAPIIneligible) {
+			tripCreatorAPICircuit(partnerTag, marketplace, 1*time.Hour)
+			log.Printf("[WARN] Creators API: account not eligible for marketplace %s (partner tag rejected by Amazon). Disabling API for this partner tag/marketplace for 1 hour. Update AMAZON_CREATOR_PARTNER_TAG env var to an active Associates account tag.", marketplace)
 			return s.fallback.Scrape(ctx, rawURL)
 		}
-		if strings.Contains(err.Error(), "after 3 attempts") || strings.Contains(err.Error(), "no such host") || strings.Contains(err.Error(), "timeout") {
+		if errors.Is(err, errCreatorsAPINetworkFailure) || strings.Contains(err.Error(), "no such host") || strings.Contains(err.Error(), "timeout") {
 			log.Printf("[ERR] Creators API failed due to network error: %v. Aborting HTML fallback to prevent CAPTCHA.", err)
 			return nil, err
 		}
@@ -205,15 +227,16 @@ func (s *AmazonCreatorAPIScraper) Scrape(ctx context.Context, rawURL string) (*m
 }
 
 func (s *AmazonCreatorAPIScraper) fetchFromAPI(ctx context.Context, asin, marketplace, rawURL string) (*models.Product, error) {
+	// Note: token acquisition failures are intentionally NOT wrapped with
+	// errCreatorsAPINetworkFailure - a token-endpoint hiccup says nothing about
+	// whether the product page itself is reachable, so it should fall through
+	// to the generic "fall back to HTML" branch in Scrape(), not the abort branch.
 	token, err := s.tokenManager.GetToken()
 	if err != nil {
 		return nil, fmt.Errorf("auth token error: %w", err)
 	}
 
-	partnerTag := s.defaultPartnerTag
-	if partnerTag == "" {
-		partnerTag = "notyoffers-21"
-	}
+	partnerTag := s.effectivePartnerTag()
 
 	payloadMap := map[string]interface{}{
 		"itemIds":     []string{asin},
@@ -223,6 +246,7 @@ func (s *AmazonCreatorAPIScraper) fetchFromAPI(ctx context.Context, asin, market
 		"resources": []string{
 			"itemInfo.title",
 			"itemInfo.features",
+			"images.primary.large",
 			"offersV2.listings.price",
 		},
 	}
@@ -251,8 +275,9 @@ func (s *AmazonCreatorAPIScraper) fetchFromAPI(ctx context.Context, asin, market
 		resp, err = client.Do(req)
 		if err == nil {
 			if resp.StatusCode == 429 || resp.StatusCode >= 500 {
-				err = fmt.Errorf("HTTP %d", resp.StatusCode)
+				snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 				resp.Body.Close()
+				err = fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
 			} else {
 				break
 			}
@@ -265,7 +290,7 @@ func (s *AmazonCreatorAPIScraper) fetchFromAPI(ctx context.Context, asin, market
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("sending API request after %d attempts: %w", maxRetries, err)
+		return nil, fmt.Errorf("%w: sending API request after %d attempts: %v", errCreatorsAPINetworkFailure, maxRetries, err)
 	}
 	defer resp.Body.Close()
 
@@ -275,7 +300,11 @@ func (s *AmazonCreatorAPIScraper) fetchFromAPI(ctx context.Context, asin, market
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API request failed (HTTP %d): %s", resp.StatusCode, string(bodyBytes))
+		bodyStr := string(bodyBytes)
+		if strings.Contains(bodyStr, "AssociateNotEligible") {
+			return nil, fmt.Errorf("%w: API request failed (HTTP %d): %s", errCreatorsAPIIneligible, resp.StatusCode, bodyStr)
+		}
+		return nil, fmt.Errorf("API request failed (HTTP %d): %s", resp.StatusCode, bodyStr)
 	}
 
 	var apiResp apiGetItemsResponse
@@ -284,7 +313,11 @@ func (s *AmazonCreatorAPIScraper) fetchFromAPI(ctx context.Context, asin, market
 	}
 
 	if len(apiResp.Errors) > 0 {
-		return nil, fmt.Errorf("API returned errors: %s - %s", apiResp.Errors[0].Code, apiResp.Errors[0].Message)
+		apiErr := fmt.Errorf("API returned errors: %s - %s", apiResp.Errors[0].Code, apiResp.Errors[0].Message)
+		if apiResp.Errors[0].Code == "AssociateNotEligible" {
+			apiErr = fmt.Errorf("%w: %v", errCreatorsAPIIneligible, apiErr)
+		}
+		return nil, apiErr
 	}
 
 	if apiResp.ItemsResult == nil || len(apiResp.ItemsResult.Items) == 0 {
@@ -311,6 +344,10 @@ func (s *AmazonCreatorAPIScraper) fetchFromAPI(ctx context.Context, asin, market
 		if len(prod.Features) > 6 {
 			prod.Features = prod.Features[:6]
 		}
+	}
+
+	if item.Images != nil && item.Images.Primary != nil && item.Images.Primary.Large != nil {
+		prod.ImageURL = item.Images.Primary.Large.URL
 	}
 
 	if item.OffersV2 != nil && len(item.OffersV2.Listings) > 0 {
@@ -384,7 +421,20 @@ type apiItem struct {
 	ASIN          string       `json:"asin"`
 	DetailPageURL string       `json:"detailPageUrl"`
 	ItemInfo      *apiItemInfo `json:"itemInfo,omitempty"`
+	Images        *apiImages   `json:"images,omitempty"`
 	OffersV2      *apiOffersV2 `json:"offersV2,omitempty"`
+}
+
+type apiImages struct {
+	Primary *apiImagePrimary `json:"primary,omitempty"`
+}
+
+type apiImagePrimary struct {
+	Large *apiImageDetail `json:"large,omitempty"`
+}
+
+type apiImageDetail struct {
+	URL string `json:"url"`
 }
 
 type apiItemInfo struct {

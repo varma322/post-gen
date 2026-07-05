@@ -122,6 +122,8 @@ func (s server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		AffiliateTag:        req.AffiliateTag,
 		FacebookPageID:      req.FacebookPageID,
 		FacebookAccessToken: req.FacebookAccessToken,
+		Active:              req.Active,
+		ExtraParams:         req.ExtraParams,
 	}
 
 	accounts = append(accounts, newAcc)
@@ -148,13 +150,20 @@ func (s server) handleUpdateAccount(w http.ResponseWriter, r *http.Request, name
 	found := false
 	for i, acc := range accounts {
 		if acc.Name == name {
-			accounts[i] = models.Account{
-				Name:                name,
-				TemplatePath:        req.TemplatePath,
-				AffiliateTag:        req.AffiliateTag,
-				FacebookPageID:      req.FacebookPageID,
-				FacebookAccessToken: req.FacebookAccessToken,
+			// Update in place (rather than replacing the whole struct) so fields
+			// the request doesn't carry (Active, ExtraParams, UseAI, AIPrompt)
+			// are preserved instead of silently reset to their zero value.
+			acc.TemplatePath = req.TemplatePath
+			acc.AffiliateTag = req.AffiliateTag
+			acc.FacebookPageID = req.FacebookPageID
+			acc.FacebookAccessToken = req.FacebookAccessToken
+			if req.Active != nil {
+				acc.Active = req.Active
 			}
+			if req.ExtraParams != nil {
+				acc.ExtraParams = req.ExtraParams
+			}
+			accounts[i] = acc
 			found = true
 			break
 		}
@@ -720,6 +729,10 @@ func (s server) handleJobsActive(w http.ResponseWriter, r *http.Request) {
 
 	job, err := s.engine.GetActiveJob(r.Context())
 	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if job == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"active": false})
 		return
 	}

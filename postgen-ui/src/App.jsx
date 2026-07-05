@@ -22,6 +22,7 @@ export default function App() {
   const [accFormAffiliateTag, setAccFormAffiliateTag] = useState('');
   const [accFormFbPageId, setAccFormFbPageId] = useState('');
   const [accFormFbToken, setAccFormFbToken] = useState('');
+  const [accFormActive, setAccFormActive] = useState(true);
   const [accountStatus, setAccountStatus] = useState({ text: '', isError: false });
 
   // Generation state
@@ -44,6 +45,7 @@ export default function App() {
   // Auto-Publisher state
   const [queuedProducts, setQueuedProducts] = useState([]);
   const [queueLoading, setQueueLoading] = useState(false);
+  const [queueError, setQueueError] = useState('');
   const [newUrls, setNewUrls] = useState('');
   const [activeJob, setActiveJob] = useState(null);
 
@@ -80,14 +82,17 @@ export default function App() {
 
   const loadQueuedProducts = async () => {
     setQueueLoading(true);
+    setQueueError('');
     try {
       const resp = await apiFetch("/products");
-      if (resp.ok) {
-        const data = await resp.json();
-        setQueuedProducts(data.products || []);
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        throw new Error(data.error || `Failed to load product pool (HTTP ${resp.status})`);
       }
+      const data = await resp.json();
+      setQueuedProducts(data.products || []);
     } catch (err) {
-      console.error(err);
+      setQueueError(err.message);
     } finally {
       setQueueLoading(false);
     }
@@ -98,8 +103,10 @@ export default function App() {
     if (parsed.length === 0) return;
 
     setStatusMessage(`Adding ${parsed.length} items to pool...`);
-    setNewUrls('');
-    
+
+    const failedUrls = [];
+    let successCount = 0;
+
     for (const url of parsed) {
       try {
         const resp = await apiFetch("/products", {
@@ -107,18 +114,28 @@ export default function App() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ url })
         });
-        if (!resp.ok) {
-          const data = await resp.json();
+        if (resp.ok) {
+          successCount++;
+        } else {
+          const data = await resp.json().catch(() => ({}));
           console.error(data.error);
+          failedUrls.push(url);
         }
       } catch (err) {
         console.error(err);
+        failedUrls.push(url);
       }
     }
-    
-    setStatusMessage("Done queuing products.");
+
+    // Only clear the input of URLs that succeeded, so failures can be retried.
+    setNewUrls(failedUrls.join('\n'));
+    setStatusMessage(
+      failedUrls.length === 0
+        ? `Queued ${successCount}/${parsed.length} product(s).`
+        : `Queued ${successCount}/${parsed.length} product(s), ${failedUrls.length} failed (left in the box for retry).`
+    );
     loadQueuedProducts();
-    setTimeout(() => setStatusMessage(""), 2000);
+    setTimeout(() => setStatusMessage(""), 4000);
   };
 
   const handleDeleteQueuedProduct = async (id) => {
@@ -324,12 +341,14 @@ export default function App() {
       setAccFormAffiliateTag(acc.affiliate_tag || "");
       setAccFormFbPageId(acc.facebook_page_id || "");
       setAccFormFbToken(acc.facebook_access_token || "");
+      setAccFormActive(acc.active !== false);
     } else {
       setAccFormName("");
       setAccFormTemplate(templates.length > 0 ? templates[0].path : "");
       setAccFormAffiliateTag("");
       setAccFormFbPageId("");
       setAccFormFbToken("");
+      setAccFormActive(true);
     }
     setAccountStatus({ text: '', isError: false });
     setShowAccountForm(true);
@@ -347,7 +366,8 @@ export default function App() {
       template_path: accFormTemplate,
       affiliate_tag: accFormAffiliateTag.trim(),
       facebook_page_id: accFormFbPageId.trim(),
-      facebook_access_token: accFormFbToken.trim()
+      facebook_access_token: accFormFbToken.trim(),
+      active: accFormActive
     };
 
     try {
@@ -371,6 +391,32 @@ export default function App() {
       }, 1000);
     } catch (err) {
       setAccountStatus({ text: "Error: " + err.message, isError: true });
+    }
+  };
+
+  // Quick toggle from the accounts table - resends the account's existing
+  // fields with only `active` flipped, rather than requiring the full edit form.
+  const handleToggleAccountActive = async (acc) => {
+    const nextActive = acc.active === false;
+    try {
+      const resp = await apiFetch(`/accounts/${encodeURIComponent(acc.name)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          template_path: acc.template_path,
+          affiliate_tag: acc.affiliate_tag || "",
+          facebook_page_id: acc.facebook_page_id || "",
+          facebook_access_token: acc.facebook_access_token || "",
+          active: nextActive
+        })
+      });
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to update account status");
+      }
+      loadAccounts();
+    } catch (err) {
+      alert("Error: " + err.message);
     }
   };
 
@@ -1128,13 +1174,26 @@ export default function App() {
 
                         <div className="md:col-span-2">
                           <label className="block text-sm font-semibold text-on-surface-variant mb-2">Facebook Page Access Token</label>
-                          <input 
-                            type="password" 
+                          <input
+                            type="password"
                             value={accFormFbToken}
                             onChange={(e) => setAccFormFbToken(e.target.value)}
                             placeholder="EAAiT..."
                             className="w-full bg-surface-variant border border-outline-variant rounded-lg px-4 py-2.5 text-on-surface focus:ring-2 focus:ring-primary focus:border-transparent transition-all text-sm"
                           />
+                        </div>
+
+                        <div className="md:col-span-2 flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            id="acc-form-active"
+                            checked={accFormActive}
+                            onChange={(e) => setAccFormActive(e.target.checked)}
+                            className="w-4 h-4"
+                          />
+                          <label htmlFor="acc-form-active" className="text-sm font-semibold text-on-surface-variant">
+                            Active (participates in Auto-Publisher candidate selection)
+                          </label>
                         </div>
                       </div>
 
@@ -1165,32 +1224,44 @@ export default function App() {
                             <th className="px-6 py-4">Template Path</th>
                             <th className="px-6 py-4">Affiliate Tag</th>
                             <th className="px-6 py-4">FB Destination Page ID</th>
+                            <th className="px-6 py-4">Status</th>
                             <th className="px-6 py-4 text-right">Actions</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-outline-variant/60">
                           {accounts.length === 0 ? (
                             <tr>
-                              <td colSpan="5" className="px-6 py-8 text-center text-on-surface-variant text-sm">
+                              <td colSpan="6" className="px-6 py-8 text-center text-on-surface-variant text-sm">
                                 No accounts configured. Click "Add New Account" to begin.
                               </td>
                             </tr>
                           ) : (
-                            accounts.map((acc) => (
+                            accounts.map((acc) => {
+                              const isActive = acc.active !== false;
+                              return (
                               <tr key={acc.name} className="hover:bg-surface-variant/20 transition-colors text-sm text-on-surface">
                                 <td className="px-6 py-4 font-bold text-primary">{acc.name}</td>
                                 <td className="px-6 py-4 font-mono text-xs text-on-surface-variant">{acc.template_path}</td>
                                 <td className="px-6 py-4">{acc.affiliate_tag || '-'}</td>
                                 <td className="px-6 py-4 font-mono text-xs">{acc.facebook_page_id || '-'}</td>
+                                <td className="px-6 py-4">
+                                  <button
+                                    onClick={() => handleToggleAccountActive(acc)}
+                                    title={isActive ? "Click to deactivate" : "Click to activate"}
+                                    className={`text-xs px-2.5 py-1 rounded-full font-bold uppercase transition-all ${isActive ? 'bg-primary/10 text-primary hover:bg-primary/20' : 'bg-surface-variant text-on-surface-variant hover:bg-surface-container-highest'}`}
+                                  >
+                                    {isActive ? 'Active' : 'Inactive'}
+                                  </button>
+                                </td>
                                 <td className="px-6 py-4 text-right">
                                   <div className="inline-flex gap-2">
-                                    <button 
+                                    <button
                                       onClick={() => handleOpenAccountForm(acc)}
                                       className="text-xs bg-surface-variant hover:bg-surface-container-high border border-outline-variant text-on-surface px-3 py-1.5 rounded-md font-bold transition-all"
                                     >
                                       Edit
                                     </button>
-                                    <button 
+                                    <button
                                       onClick={() => handleDeleteAccount(acc.name)}
                                       className="text-xs bg-red-950/20 hover:bg-red-950/40 border border-red-900/40 text-red-200 px-3 py-1.5 rounded-md font-bold transition-all"
                                     >
@@ -1199,7 +1270,8 @@ export default function App() {
                                   </div>
                                 </td>
                               </tr>
-                            ))
+                              );
+                            })
                           )}
                         </tbody>
                       </table>
@@ -1485,6 +1557,10 @@ export default function App() {
                         Refresh Pool
                       </button>
                     </div>
+
+                    {queueError && (
+                      <div className="text-error bg-error-container/10 p-4 rounded-xl border border-error/20 text-sm">{queueError}</div>
+                    )}
 
                     {queueLoading ? (
                       <p className="text-center py-6 text-on-surface-variant text-sm">Loading pool...</p>

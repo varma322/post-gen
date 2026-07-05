@@ -33,7 +33,7 @@ func main() {
 	splitMode := flag.Bool("split", false, "Save each product to a separate file (Split mode)")
 	clearDir := flag.Bool("clear", false, "Clear output directory before starting")
 	serveMode := flag.Bool("serve", false, "Start API server mode (compatibility)")
-	addr := flag.String("addr", ":8080", "Address for HTTP API server")
+	addr := flag.String("addr", ":8088", "Address for HTTP API server")
 	apiToken := flag.String("api-token", "", "Bearer token for API authentication (overrides POSTGEN_API_TOKEN env var)")
 	publish := flag.Bool("publish", false, "Publish generated posts directly to Facebook Pages (configured in accounts.json)")
 	publishDelay := flag.Duration("publish-delay", 15*time.Minute, "Delay spacing duration between consecutive Facebook publications to prevent spam blocks (e.g. 15m)")
@@ -76,7 +76,7 @@ func main() {
 
 	if *url == "" && *filePath == "" {
 		fmt.Println("Usage: postgen [--url <link> | --file <path>] [--account <name> | --all] [--split] [--clear] [--publish] [--publish-delay <duration>]")
-		fmt.Println("       postgen --serve [--addr :8080]")
+		fmt.Println("       postgen --serve [--addr :8088]")
 		return
 	}
 
