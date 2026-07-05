@@ -80,3 +80,5 @@ update.sh
 report_findings.json
 implementation_plans.md
 
+bug_fix_plan.md
+implementation_feature.md

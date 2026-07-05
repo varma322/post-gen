@@ -58,3 +58,25 @@ the deliberate choice for this repo. Authoring a mocked preview (stubbed
   cards, forms broken out of `App.jsx`), this whole setup (the shim, the
   single-component `componentSrcMap` pin) should be revisited — that's the
   point where design-sync starts being genuinely useful here.
+
+## conventions.md drift found on 2026-07-05 re-sync
+
+Validated `conventions.md`'s semantic-color/font family table against the
+freshly compiled `ds-bundle/_ds_bundle.css`. Four names it lists are defined
+in `tailwind.config.js` `theme.extend` but **not present in the compiled
+CSS** because nothing in `src/App.jsx` currently uses them (Tailwind JIT
+only emits classes it sees in `content:` sources): `bg-background`,
+`text-on-error`, `bg-tertiary-container`, `font-display`. Confirmed via
+`git show HEAD:postgen-ui/src/App.jsx` that this predates this session's
+edits — not a regression from today's `App.jsx` changes.
+
+Practical effect: a design built by the design agent using one of these four
+classes will render unstyled for that property, since the shipped
+`_ds_bundle.css` has no rule for it. This is a structural risk of sourcing a
+"design system" from a single JIT-compiled app rather than a real component
+library — any token not yet exercised in `App.jsx` is invisible to the build,
+and the set of "missing" classes can silently grow as `App.jsx` changes.
+Flagged to the user; conventions.md left as-is pending their call on how to
+handle it (trim the table to only classes proven in the bundle, or add a
+caveat that unlisted/less-common tokens should be verified against
+`_ds_bundle.css` before use).
