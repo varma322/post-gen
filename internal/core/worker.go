@@ -128,6 +128,20 @@ func (w *Worker) processNextJobItem() {
 
 	log.Printf("[INFO] Worker publishing item %d (Account: %s, URL: %s)", nextItem.ID, nextItem.AccountName, nextItem.ProductURL)
 
+	resolvedAccounts, err := w.engine.resolveAccounts([]string{nextItem.AccountName})
+	if err != nil || len(resolvedAccounts) == 0 {
+		errMsg := fmt.Sprintf("Account resolution error: %v", err)
+		_ = w.engine.db.UpdateJobItemStatus(ctx, nextItem.ID, "failed", errMsg, nil)
+		return
+	}
+	acc := resolvedAccounts[0]
+
+	if eligible, reason := w.engine.checkAccountEligibility(ctx, acc, time.Now()); !eligible {
+		log.Printf("[INFO] Item %d skipped: %s", nextItem.ID, reason)
+		_ = w.engine.db.UpdateJobItemStatus(ctx, nextItem.ID, "skipped", reason, nil)
+		return
+	}
+
 	if err := w.engine.db.UpdateJobItemStatus(ctx, nextItem.ID, "publishing", "", nil); err != nil {
 		log.Printf("[ERR] Failed to set status to publishing for item %d: %v", nextItem.ID, err)
 		return
@@ -155,14 +169,6 @@ func (w *Worker) processNextJobItem() {
 	}
 
 	enrichBaseProduct(product)
-
-	resolvedAccounts, err := w.engine.resolveAccounts([]string{nextItem.AccountName})
-	if err != nil || len(resolvedAccounts) == 0 {
-		errMsg := fmt.Sprintf("Account resolution error: %v", err)
-		_ = w.engine.db.UpdateJobItemStatus(ctx, nextItem.ID, "failed", errMsg, nil)
-		return
-	}
-	acc := resolvedAccounts[0]
 
 	productForAccount := *product
 	affiliateLink := utils.AddAffiliateTag(nextItem.ProductURL, acc.AffiliateTag, acc.ExtraParams)

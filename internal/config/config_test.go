@@ -233,6 +233,10 @@ func TestAccountRoundTripWithAllFields(t *testing.T) {
 			AIPrompt:            "Custom AI prompt",
 			Active:              &active,
 			ExtraParams:         extraParams,
+			MaxPostsPerDay:      5,
+			ActiveHoursStart:    "09:00",
+			ActiveHoursEnd:      "21:00",
+			MinDelayMinutes:     60,
 		},
 	}
 
@@ -289,5 +293,19 @@ func TestAccountRoundTripWithAllFields(t *testing.T) {
 		if acc.ExtraParams[k] != v {
 			t.Errorf("extra_params[%s] mismatch: expected %s, got %s", k, v, acc.ExtraParams[k])
 		}
+	}
+
+	// Verify scheduling/rate-limit fields
+	if acc.MaxPostsPerDay != original[0].MaxPostsPerDay {
+		t.Errorf("max_posts_per_day mismatch: expected %d, got %d", original[0].MaxPostsPerDay, acc.MaxPostsPerDay)
+	}
+	if acc.ActiveHoursStart != original[0].ActiveHoursStart {
+		t.Errorf("active_hours_start mismatch: expected %s, got %s", original[0].ActiveHoursStart, acc.ActiveHoursStart)
+	}
+	if acc.ActiveHoursEnd != original[0].ActiveHoursEnd {
+		t.Errorf("active_hours_end mismatch: expected %s, got %s", original[0].ActiveHoursEnd, acc.ActiveHoursEnd)
+	}
+	if acc.MinDelayMinutes != original[0].MinDelayMinutes {
+		t.Errorf("min_delay_minutes mismatch: expected %d, got %d", original[0].MinDelayMinutes, acc.MinDelayMinutes)
 	}
 }

@@ -75,6 +75,10 @@ func (p *Pool) migrate(ctx context.Context) error {
 		ai_prompt            TEXT,
 		active               BOOLEAN NOT NULL DEFAULT TRUE,
 		extra_params         JSONB,
+		max_posts_per_day    INT NOT NULL DEFAULT 0,
+		active_hours_start   TEXT NOT NULL DEFAULT '',
+		active_hours_end     TEXT NOT NULL DEFAULT '',
+		min_delay_minutes    INT NOT NULL DEFAULT 0,
 		created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		updated_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);
@@ -83,6 +87,10 @@ func (p *Pool) migrate(ctx context.Context) error {
 	-- so existing installs pick them up without losing data.
 	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;
 	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS extra_params JSONB;
+	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS max_posts_per_day INT NOT NULL DEFAULT 0;
+	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS active_hours_start TEXT NOT NULL DEFAULT '';
+	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS active_hours_end TEXT NOT NULL DEFAULT '';
+	ALTER TABLE accounts ADD COLUMN IF NOT EXISTS min_delay_minutes INT NOT NULL DEFAULT 0;
 
 	CREATE OR REPLACE FUNCTION update_updated_at_column()
 	RETURNS TRIGGER AS $$
@@ -169,7 +177,8 @@ func (p *Pool) migrate(ctx context.Context) error {
 // LoadAccounts retrieves all accounts from the database.
 func (p *Pool) LoadAccounts(ctx context.Context) ([]models.Account, error) {
 	rows, err := p.pool.Query(ctx, `
-		SELECT name, template_path, affiliate_tag, facebook_page_id, facebook_access_token, use_ai, ai_prompt, active, extra_params
+		SELECT name, template_path, affiliate_tag, facebook_page_id, facebook_access_token, use_ai, ai_prompt, active, extra_params,
+			max_posts_per_day, active_hours_start, active_hours_end, min_delay_minutes
 		FROM accounts ORDER BY id ASC
 	`)
 	if err != nil {
@@ -192,6 +201,10 @@ func (p *Pool) LoadAccounts(ctx context.Context) ([]models.Account, error) {
 			&a.AIPrompt,
 			&active,
 			&extraParamsJSON,
+			&a.MaxPostsPerDay,
+			&a.ActiveHoursStart,
+			&a.ActiveHoursEnd,
+			&a.MinDelayMinutes,
 		); err != nil {
 			return nil, fmt.Errorf("scanning account row: %w", err)
 		}
@@ -218,8 +231,9 @@ func (p *Pool) UpsertAccount(ctx context.Context, a models.Account) error {
 	}
 
 	_, err := p.pool.Exec(ctx, `
-		INSERT INTO accounts (name, template_path, affiliate_tag, facebook_page_id, facebook_access_token, use_ai, ai_prompt, active, extra_params)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO accounts (name, template_path, affiliate_tag, facebook_page_id, facebook_access_token, use_ai, ai_prompt, active, extra_params,
+			max_posts_per_day, active_hours_start, active_hours_end, min_delay_minutes)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		ON CONFLICT (name) DO UPDATE SET
 			template_path        = EXCLUDED.template_path,
 			affiliate_tag        = EXCLUDED.affiliate_tag,
@@ -228,11 +242,16 @@ func (p *Pool) UpsertAccount(ctx context.Context, a models.Account) error {
 			use_ai               = EXCLUDED.use_ai,
 			ai_prompt            = EXCLUDED.ai_prompt,
 			active               = EXCLUDED.active,
-			extra_params         = EXCLUDED.extra_params
+			extra_params         = EXCLUDED.extra_params,
+			max_posts_per_day    = EXCLUDED.max_posts_per_day,
+			active_hours_start   = EXCLUDED.active_hours_start,
+			active_hours_end     = EXCLUDED.active_hours_end,
+			min_delay_minutes    = EXCLUDED.min_delay_minutes
 	`,
 		a.Name, a.TemplatePath, a.AffiliateTag,
 		a.FacebookPageID, a.FacebookAccessToken,
 		a.UseAI, a.AIPrompt, a.IsActive(), extraParamsJSON,
+		a.MaxPostsPerDay, a.ActiveHoursStart, a.ActiveHoursEnd, a.MinDelayMinutes,
 	)
 	return err
 }
@@ -601,4 +620,30 @@ func (p *Pool) GetCandidateProductsForAccount(ctx context.Context, accountName s
 		products = append(products, qp)
 	}
 	return products, nil
+}
+
+// CountPostsTodayForAccount returns how many posts the given account has
+// published since the start of the current calendar day.
+func (p *Pool) CountPostsTodayForAccount(ctx context.Context, accountName string) (int, error) {
+	var count int
+	err := p.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM published_posts WHERE account_name = $1 AND created_at >= CURRENT_DATE
+	`, accountName).Scan(&count)
+	return count, err
+}
+
+// GetLastPublishedAtForAccount returns the timestamp of the most recent post
+// published by the given account, or nil if it has never published.
+func (p *Pool) GetLastPublishedAtForAccount(ctx context.Context, accountName string) (*time.Time, error) {
+	var createdAt time.Time
+	err := p.pool.QueryRow(ctx, `
+		SELECT created_at FROM published_posts WHERE account_name = $1 ORDER BY created_at DESC LIMIT 1
+	`, accountName).Scan(&createdAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &createdAt, nil
 }

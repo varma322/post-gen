@@ -44,6 +44,10 @@ func TestLoadSaveAccounts(t *testing.T) {
 		UseAI:               true,
 		Active:              &active,
 		ExtraParams:         extraParams,
+		MaxPostsPerDay:      5,
+		ActiveHoursStart:    "09:00",
+		ActiveHoursEnd:      "21:00",
+		MinDelayMinutes:     60,
 	}
 
 	// Save
@@ -83,8 +87,83 @@ func TestLoadSaveAccounts(t *testing.T) {
 		t.Errorf("ExtraParams mismatch: expected %v, got %v", extraParams, loaded.ExtraParams)
 	}
 
+	// Verify scheduling/rate-limit fields round-trip
+	if loaded.MaxPostsPerDay != acc.MaxPostsPerDay {
+		t.Errorf("MaxPostsPerDay mismatch: expected %d, got %d", acc.MaxPostsPerDay, loaded.MaxPostsPerDay)
+	}
+	if loaded.ActiveHoursStart != acc.ActiveHoursStart {
+		t.Errorf("ActiveHoursStart mismatch: expected %s, got %s", acc.ActiveHoursStart, loaded.ActiveHoursStart)
+	}
+	if loaded.ActiveHoursEnd != acc.ActiveHoursEnd {
+		t.Errorf("ActiveHoursEnd mismatch: expected %s, got %s", acc.ActiveHoursEnd, loaded.ActiveHoursEnd)
+	}
+	if loaded.MinDelayMinutes != acc.MinDelayMinutes {
+		t.Errorf("MinDelayMinutes mismatch: expected %d, got %d", acc.MinDelayMinutes, loaded.MinDelayMinutes)
+	}
+
 	// Clean up
 	_ = db.DeleteAccount(ctx, acc.Name)
+}
+
+// TestCountAndLastPublishedForAccount tests the per-account post history
+// lookups that back the scheduling/rate-limit eligibility checks.
+func TestCountAndLastPublishedForAccount(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	const accountName = "schedule-test-account"
+	_, _ = db.pool.Exec(ctx, "DELETE FROM published_posts WHERE account_name = $1", accountName)
+
+	// No posts yet: count should be 0, last published should be nil.
+	count, err := db.CountPostsTodayForAccount(ctx, accountName)
+	if err != nil {
+		t.Fatalf("CountPostsTodayForAccount failed: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 posts today, got %d", count)
+	}
+
+	last, err := db.GetLastPublishedAtForAccount(ctx, accountName)
+	if err != nil {
+		t.Fatalf("GetLastPublishedAtForAccount failed: %v", err)
+	}
+	if last != nil {
+		t.Errorf("expected nil last published time, got %v", last)
+	}
+
+	// Record two posts for this account.
+	for i := 0; i < 2; i++ {
+		err := db.RecordPublishedPost(ctx, models.PublishedPost{
+			AccountName:    accountName,
+			FacebookPageID: "123",
+			FacebookPostID: "post-id",
+			ProductURL:     "https://example.com/product",
+		})
+		if err != nil {
+			t.Fatalf("RecordPublishedPost failed: %v", err)
+		}
+	}
+
+	count, err = db.CountPostsTodayForAccount(ctx, accountName)
+	if err != nil {
+		t.Fatalf("CountPostsTodayForAccount failed: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 posts today, got %d", count)
+	}
+
+	last, err = db.GetLastPublishedAtForAccount(ctx, accountName)
+	if err != nil {
+		t.Fatalf("GetLastPublishedAtForAccount failed: %v", err)
+	}
+	if last == nil {
+		t.Fatal("expected a last published time, got nil")
+	}
+	if time.Since(*last) > time.Minute {
+		t.Errorf("expected last published time to be recent, got %v", last)
+	}
+
+	_, _ = db.pool.Exec(ctx, "DELETE FROM published_posts WHERE account_name = $1", accountName)
 }
 
 // TestAccountBackwardCompatibility tests that accounts without Active field default to active

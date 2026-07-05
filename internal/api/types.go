@@ -45,6 +45,10 @@ type accountRequest struct {
 	FacebookAccessToken string            `json:"facebook_access_token"`
 	Active              *bool             `json:"active,omitempty"`
 	ExtraParams         map[string]string `json:"extra_params,omitempty"`
+	MaxPostsPerDay      int               `json:"max_posts_per_day"`
+	ActiveHoursStart    string            `json:"active_hours_start"`
+	ActiveHoursEnd      string            `json:"active_hours_end"`
+	MinDelayMinutes     int               `json:"min_delay_minutes"`
 }
 
 type streamProgressPayload struct {

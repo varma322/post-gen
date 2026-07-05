@@ -581,6 +581,11 @@ func (e *Engine) TriggerAutoPostJob(ctx context.Context) (int, error) {
 	usedURLs := make(map[string]bool)
 
 	for _, acc := range activeAccounts {
+		if eligible, reason := e.checkAccountEligibility(ctx, acc, time.Now()); !eligible {
+			log.Printf("[INFO] Skipping account %s: %s", acc.Name, reason)
+			continue
+		}
+
 		// Get candidates that haven't been posted to this account yet
 		candidates, err := e.db.GetCandidateProductsForAccount(ctx, acc.Name)
 		if err != nil {
@@ -626,6 +631,27 @@ func (e *Engine) TriggerAutoPostJob(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return jobID, nil
+}
+
+// checkAccountEligibility evaluates an account's per-account scheduling and
+// rate-limit rules for the auto-post pipeline. It is only called from the
+// DB-backed auto-post job flow (TriggerAutoPostJob, Worker), so e.db is
+// assumed non-nil. On a transient error fetching post history, it logs and
+// fails open (treats the account as eligible) rather than blocking the run.
+func (e *Engine) checkAccountEligibility(ctx context.Context, acc models.Account, now time.Time) (bool, string) {
+	todayCount, err := e.db.CountPostsTodayForAccount(ctx, acc.Name)
+	if err != nil {
+		log.Printf("[WARN] Failed to count today's posts for account %s: %v", acc.Name, err)
+		return true, ""
+	}
+
+	lastPostTime, err := e.db.GetLastPublishedAtForAccount(ctx, acc.Name)
+	if err != nil {
+		log.Printf("[WARN] Failed to get last published time for account %s: %v", acc.Name, err)
+		return true, ""
+	}
+
+	return acc.IsEligibleToPost(now, todayCount, lastPostTime)
 }
 
 // GetActiveJob retrieves current active job status

@@ -143,6 +143,11 @@ func (s server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := validateActiveHours(req.ActiveHoursStart, req.ActiveHoursEnd); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
 	accounts := s.engine.Accounts()
 	for _, acc := range accounts {
 		if acc.Name == req.Name {
@@ -159,6 +164,10 @@ func (s server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		FacebookAccessToken: req.FacebookAccessToken,
 		Active:              req.Active,
 		ExtraParams:         req.ExtraParams,
+		MaxPostsPerDay:      req.MaxPostsPerDay,
+		ActiveHoursStart:    req.ActiveHoursStart,
+		ActiveHoursEnd:      req.ActiveHoursEnd,
+		MinDelayMinutes:     req.MinDelayMinutes,
 	}
 
 	accounts = append(accounts, newAcc)
@@ -181,6 +190,11 @@ func (s server) handleUpdateAccount(w http.ResponseWriter, r *http.Request, name
 		return
 	}
 
+	if err := validateActiveHours(req.ActiveHoursStart, req.ActiveHoursEnd); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
 	accounts := s.engine.Accounts()
 	found := false
 	for i, acc := range accounts {
@@ -198,6 +212,10 @@ func (s server) handleUpdateAccount(w http.ResponseWriter, r *http.Request, name
 			if req.ExtraParams != nil {
 				acc.ExtraParams = req.ExtraParams
 			}
+			acc.MaxPostsPerDay = req.MaxPostsPerDay
+			acc.ActiveHoursStart = req.ActiveHoursStart
+			acc.ActiveHoursEnd = req.ActiveHoursEnd
+			acc.MinDelayMinutes = req.MinDelayMinutes
 			accounts[i] = acc
 			found = true
 			break
@@ -215,6 +233,21 @@ func (s server) handleUpdateAccount(w http.ResponseWriter, r *http.Request, name
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated", "name": name})
+}
+
+// validateActiveHours checks that non-empty active-hours bounds are valid
+// "HH:MM" 24-hour times, so a malformed value can't silently disable the
+// active-hours check instead of being rejected up front.
+func validateActiveHours(start, end string) error {
+	for _, v := range []string{start, end} {
+		if v == "" {
+			continue
+		}
+		if _, err := time.Parse("15:04", v); err != nil {
+			return fmt.Errorf("invalid active hours time %q: expected HH:MM 24-hour format", v)
+		}
+	}
+	return nil
 }
 
 func (s server) handleDeleteAccount(w http.ResponseWriter, name string) {
