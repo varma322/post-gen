@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"post-gen/internal/core"
 	"post-gen/internal/generator"
 	"post-gen/internal/models"
+	"post-gen/internal/scraper"
 	"post-gen/internal/utils"
 	postgenWeb "post-gen/web"
 )
@@ -60,7 +62,40 @@ func (s server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Check DB connectivity by attempting to get active job
+	var dbConnected bool
+	var activeJob *models.PublicationJob
+	if job, err := s.engine.GetActiveJob(ctx); err == nil {
+		dbConnected = true
+		activeJob = job // may be nil if no active job
+	} else {
+		dbConnected = false
+	}
+
+	// Get circuit breaker status
+	circuitStatuses := scraper.GetCircuitBreakerStatus()
+	breakers := make([]circuitBreakerStatus, 0, len(circuitStatuses))
+	for _, cs := range circuitStatuses {
+		until := cs.Until
+		breakers = append(breakers, circuitBreakerStatus{
+			PartnerTag:  cs.PartnerTag,
+			Marketplace: cs.Marketplace,
+			Open:        true,
+			Until:       &until,
+		})
+	}
+
+	resp := healthResponse{
+		Status:          "ok",
+		DBConnected:     dbConnected,
+		ActiveJob:       activeJob,
+		CircuitBreakers: breakers,
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s server) handleAccounts(w http.ResponseWriter, r *http.Request) {

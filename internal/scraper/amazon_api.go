@@ -53,6 +53,42 @@ func tripCreatorAPICircuit(partnerTag, marketplace string, d time.Duration) {
 	apiCircuitUntil[circuitKey(partnerTag, marketplace)] = time.Now().Add(d)
 }
 
+// GetCircuitBreakerStatus returns the current state of all open circuits as a list of (partnerTag, marketplace, until) tuples.
+// Used for health check and observability endpoints.
+func GetCircuitBreakerStatus() []struct {
+	PartnerTag  string
+	Marketplace string
+	Until       time.Time
+} {
+	apiCircuitMu.RLock()
+	defer apiCircuitMu.RUnlock()
+
+	var result []struct {
+		PartnerTag  string
+		Marketplace string
+		Until       time.Time
+	}
+
+	for key, until := range apiCircuitUntil {
+		if time.Now().Before(until) {
+			parts := strings.Split(key, "|")
+			if len(parts) == 2 {
+				result = append(result, struct {
+					PartnerTag  string
+					Marketplace string
+					Until       time.Time
+				}{
+					PartnerTag:  parts[0],
+					Marketplace: parts[1],
+					Until:       until,
+				})
+			}
+		}
+	}
+
+	return result
+}
+
 // TokenManager coordinates OAuth2 client credentials token request and thread-safe caching.
 type TokenManager struct {
 	clientID     string

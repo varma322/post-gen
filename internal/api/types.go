@@ -96,3 +96,16 @@ type affiliateLinkResponse struct {
 	AffiliateURL string `json:"affiliate_url"`
 }
 
+type circuitBreakerStatus struct {
+	PartnerTag  string     `json:"partner_tag"`
+	Marketplace string     `json:"marketplace"`
+	Open        bool       `json:"open"`
+	Until       *time.Time `json:"until,omitempty"`
+}
+
+type healthResponse struct {
+	Status          string                 `json:"status"`
+	DBConnected     bool                   `json:"db_connected"`
+	ActiveJob       *models.PublicationJob `json:"active_job,omitempty"`
+	CircuitBreakers []circuitBreakerStatus `json:"circuit_breakers"`
+}
