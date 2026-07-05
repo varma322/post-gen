@@ -1,0 +1,13 @@
+{
+  "projectId": "b3c6fb9b-24c1-4626-bab0-2f6fd2fe576d",
+  "shape": "package",
+  "pkg": "postgen-ui",
+  "globalName": "PostgenUi",
+  "entry": "./.design-sync/ds-entry.mjs",
+  "componentSrcMap": {
+    "App": "src/App.jsx"
+  },
+  "cssEntry": ".design-sync/.cache/app.css",
+  "readmeHeader": ".design-sync/conventions.md",
+  "buildCmd": "npm run build (outputs to ../web/, embedded into the Go binary) — then copy ../web/styles.css to .design-sync/.cache/app.css before running the converter, since cssEntry must resolve inside the package root"
+}
