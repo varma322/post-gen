@@ -77,3 +77,4 @@ graphify-out/
 chatgpt_API.py
 implementation_plan.md
 update.sh
+report_findings.json
