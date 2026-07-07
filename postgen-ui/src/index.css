@@ -5,9 +5,17 @@
 @tailwind components;
 @tailwind utilities;
 
-body { 
-    font-family: 'Inter', sans-serif; 
+body {
+    font-family: 'Inter', sans-serif;
     min-height: max(884px, 100dvh);
 }
 .label-font { font-family: 'Public Sans', sans-serif; }
+
+@keyframes fadein {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fadein {
+  animation: fadein 0.35s ease both;
+}
 
