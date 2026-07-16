@@ -74,6 +74,18 @@ func (s stubGenerator) DeleteQueuedProduct(ctx context.Context, id int) error {
 	return nil
 }
 
+func (s stubGenerator) AddAccountLink(ctx context.Context, accountName, url string) error {
+	return nil
+}
+
+func (s stubGenerator) GetAccountLinks(ctx context.Context, accountName string) ([]models.AccountLink, error) {
+	return nil, nil
+}
+
+func (s stubGenerator) DeleteAccountLink(ctx context.Context, id int) error {
+	return nil
+}
+
 func (s stubGenerator) TriggerAutoPostJob(ctx context.Context) (int, error) {
 	return 0, nil
 }

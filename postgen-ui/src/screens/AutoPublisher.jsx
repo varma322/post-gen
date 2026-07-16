@@ -175,7 +175,7 @@ export default function AutoPublisher({ apiFetch, accounts, active }) {
           <div>
             <SectionLabel icon="smart_toy">Scheduler Control</SectionLabel>
             <p className="text-xs text-on-surface-variant mb-4 leading-relaxed">
-              Triggering a job will randomly assign a unique unposted product from the pool to each active Facebook page and post them sequentially, respecting each account's own rate-limit and active-hours rules.
+              Triggering a job fills each active Facebook page's remaining daily quota with links from its own dedicated pool first, falling back to this shared pool for any shortfall, then posts them out over time respecting each account's active-hours and minimum-delay rules.
             </p>
             <div className="space-y-2 text-xs font-semibold bg-surface-variant/50 p-3 rounded-lg border border-outline-variant">
               <div className="flex justify-between">

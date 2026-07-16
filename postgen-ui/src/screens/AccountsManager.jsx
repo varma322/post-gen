@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import PageHeader from '../components/PageHeader';
+import SectionLabel from '../components/SectionLabel';
 
 export default function AccountsManager({ apiFetch, accounts, templates, onAccountsChanged }) {
   const [showAccountForm, setShowAccountForm] = useState(false);
@@ -15,6 +16,93 @@ export default function AccountsManager({ apiFetch, accounts, templates, onAccou
   const [accFormActiveHoursEnd, setAccFormActiveHoursEnd] = useState('');
   const [accFormMinDelayMinutes, setAccFormMinDelayMinutes] = useState(0);
   const [accountStatus, setAccountStatus] = useState({ text: '', isError: false });
+
+  // Per-account link pool panel state
+  const [linksAccount, setLinksAccount] = useState(null); // name of account whose pool is open, or null
+  const [accountLinks, setAccountLinks] = useState([]);
+  const [linksLoading, setLinksLoading] = useState(false);
+  const [linksError, setLinksError] = useState('');
+  const [newLinkUrls, setNewLinkUrls] = useState('');
+  const [linksActionStatus, setLinksActionStatus] = useState('');
+
+  const loadAccountLinks = async (name) => {
+    setLinksLoading(true);
+    setLinksError('');
+    try {
+      const resp = await apiFetch(`/accounts/${encodeURIComponent(name)}/links`);
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        throw new Error(data.error || `Failed to load link pool (HTTP ${resp.status})`);
+      }
+      const data = await resp.json();
+      setAccountLinks(data.links || []);
+    } catch (err) {
+      setLinksError(err.message);
+    } finally {
+      setLinksLoading(false);
+    }
+  };
+
+  const handleToggleLinksPanel = (name) => {
+    if (linksAccount === name) {
+      setLinksAccount(null);
+      return;
+    }
+    setLinksAccount(name);
+    setNewLinkUrls('');
+    setLinksActionStatus('');
+    loadAccountLinks(name);
+  };
+
+  const handleAddLinks = async () => {
+    const parsed = newLinkUrls.split(/\r?\n/).map(u => u.trim()).filter(Boolean);
+    if (parsed.length === 0 || !linksAccount) return;
+
+    setLinksActionStatus(`Adding ${parsed.length} link(s)...`);
+
+    const failedUrls = [];
+    let successCount = 0;
+
+    for (const url of parsed) {
+      try {
+        const resp = await apiFetch(`/accounts/${encodeURIComponent(linksAccount)}/links`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url })
+        });
+        if (resp.ok) {
+          successCount++;
+        } else {
+          const data = await resp.json().catch(() => ({}));
+          console.error(data.error);
+          failedUrls.push(url);
+        }
+      } catch (err) {
+        console.error(err);
+        failedUrls.push(url);
+      }
+    }
+
+    setNewLinkUrls(failedUrls.join('\n'));
+    setLinksActionStatus(
+      failedUrls.length === 0
+        ? `Added ${successCount}/${parsed.length} link(s).`
+        : `Added ${successCount}/${parsed.length} link(s), ${failedUrls.length} failed (left in the box for retry).`
+    );
+    loadAccountLinks(linksAccount);
+    setTimeout(() => setLinksActionStatus(""), 4000);
+  };
+
+  const handleDeleteLink = async (id) => {
+    try {
+      const resp = await apiFetch(`/accounts/${encodeURIComponent(linksAccount)}/links/${id}`, { method: "DELETE" });
+      if (resp.ok) {
+        loadAccountLinks(linksAccount);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   const handleOpenAccountForm = (acc = null) => {
     setEditingAccount(acc);
@@ -353,6 +441,12 @@ export default function AccountsManager({ apiFetch, accounts, templates, onAccou
                       <td className="px-6 py-4 text-right">
                         <div className="inline-flex gap-2">
                           <button
+                            onClick={() => handleToggleLinksPanel(acc.name)}
+                            className={`text-xs border px-3 py-1.5 rounded-md font-bold transition-all ${linksAccount === acc.name ? 'bg-primary/10 border-primary/30 text-primary' : 'bg-surface-variant hover:bg-surface-container-high border-outline-variant text-on-surface'}`}
+                          >
+                            Links
+                          </button>
+                          <button
                             onClick={() => handleOpenAccountForm(acc)}
                             className="text-xs bg-surface-variant hover:bg-surface-container-high border border-outline-variant text-on-surface px-3 py-1.5 rounded-md font-bold transition-all"
                           >
@@ -374,6 +468,100 @@ export default function AccountsManager({ apiFetch, accounts, templates, onAccou
           </table>
         </div>
       </div>
+
+      {linksAccount && (
+        <div className="bg-surface-container rounded-xl border border-primary/30 p-6 shadow-md space-y-6 fadein">
+          <div className="flex justify-between items-center border-b border-outline-variant pb-4">
+            <h2 className="text-xl font-bold text-primary">Link Pool: {linksAccount}</h2>
+            <button
+              onClick={() => setLinksAccount(null)}
+              className="text-on-surface-variant hover:text-on-surface p-1 hover:bg-surface-variant rounded-full"
+            >
+              <span className="material-symbols-outlined">close</span>
+            </button>
+          </div>
+
+          <p className="text-xs text-on-surface-variant leading-relaxed">
+            Links added here are dedicated to this account. When an auto-post job is triggered, this account draws
+            its daily quota from this pool first (oldest first), falling back to the shared product pool only if it
+            runs out.
+          </p>
+
+          <div>
+            <SectionLabel icon="add_link">Add Links to Pool</SectionLabel>
+            <textarea
+              value={newLinkUrls}
+              onChange={(e) => setNewLinkUrls(e.target.value)}
+              className="w-full h-28 bg-surface-variant border border-outline-variant rounded-lg p-4 text-on-surface placeholder:text-on-surface-variant/40 focus:ring-2 focus:ring-primary focus:border-transparent transition-all resize-none font-mono text-sm leading-relaxed"
+              placeholder="Paste product URLs for this account here... One per line."
+            />
+            <div className="mt-3 flex items-center gap-3">
+              <button
+                onClick={handleAddLinks}
+                className="bg-primary text-on-secondary hover:bg-primary-fixed-dim px-5 py-2.5 rounded-lg font-label font-bold text-sm transition-colors shadow flex items-center gap-2"
+              >
+                <span className="material-symbols-outlined text-lg">add_link</span>
+                Add to Pool
+              </button>
+              {linksActionStatus && (
+                <span className="text-xs text-primary font-semibold">{linksActionStatus}</span>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-on-surface-variant font-semibold uppercase">
+                Pool Contents ({accountLinks.length})
+              </span>
+              <button
+                onClick={() => loadAccountLinks(linksAccount)}
+                className="text-xs text-primary hover:text-primary-fixed-dim font-bold flex items-center gap-1.5"
+              >
+                <span className="material-symbols-outlined text-sm">refresh</span>
+                Refresh
+              </button>
+            </div>
+
+            {linksError && (
+              <div className="text-error bg-error-container/10 p-3 rounded-lg border border-error/20 text-sm">{linksError}</div>
+            )}
+
+            {linksLoading ? (
+              <p className="text-center py-6 text-on-surface-variant text-sm">Loading pool...</p>
+            ) : accountLinks.length === 0 ? (
+              <div className="text-center py-8 border border-dashed border-outline-variant bg-surface-variant/20 rounded-lg">
+                <p className="text-on-surface-variant text-sm">No links in this account's pool yet.</p>
+              </div>
+            ) : (
+              <div className="border border-outline-variant rounded-lg divide-y divide-outline-variant/60 max-h-80 overflow-y-auto">
+                {accountLinks.map((link) => (
+                  <div key={link.id} className="flex items-center gap-3 px-4 py-2.5 hover:bg-surface-variant/20 transition-colors">
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase shrink-0 ${link.posted ? 'bg-surface-container-highest text-on-surface-variant' : 'bg-primary/10 text-primary'}`}>
+                      {link.posted ? 'Posted' : 'Available'}
+                    </span>
+                    <a
+                      href={link.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex-1 min-w-0 text-xs text-on-surface-variant hover:underline font-mono truncate"
+                    >
+                      {link.url}
+                    </a>
+                    <button
+                      onClick={() => handleDeleteLink(link.id)}
+                      className="text-error bg-red-950/15 hover:bg-red-950/30 p-1.5 rounded-md border border-red-900/20 shrink-0"
+                      title="Remove from pool"
+                    >
+                      <span className="material-symbols-outlined text-sm">delete</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

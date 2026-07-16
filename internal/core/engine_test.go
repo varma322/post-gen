@@ -391,5 +391,20 @@ func TestQueueAndAutoPostRequiresDatabase(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "database required") {
 		t.Fatalf("expected database required error, got %v", err)
 	}
+
+	err = engine.AddAccountLink(context.Background(), "afficart", "https://amazon.in/dp/B0D1234567")
+	if err == nil || !strings.Contains(err.Error(), "database required") {
+		t.Fatalf("expected database required error, got %v", err)
+	}
+
+	_, err = engine.GetAccountLinks(context.Background(), "afficart")
+	if err == nil || !strings.Contains(err.Error(), "database required") {
+		t.Fatalf("expected database required error, got %v", err)
+	}
+
+	err = engine.DeleteAccountLink(context.Background(), 1)
+	if err == nil || !strings.Contains(err.Error(), "database required") {
+		t.Fatalf("expected database required error, got %v", err)
+	}
 }
 

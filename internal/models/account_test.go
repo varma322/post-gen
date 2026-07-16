@@ -9,7 +9,7 @@ func TestIsEligibleToPostDefaults(t *testing.T) {
 	acc := Account{Name: "acc"}
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
-	eligible, reason := acc.IsEligibleToPost(now, 0, nil)
+	eligible, reason, _ := acc.IsEligibleToPost(now, 0, nil)
 	if !eligible {
 		t.Errorf("expected account with no rules configured to always be eligible, got reason: %q", reason)
 	}
@@ -33,12 +33,15 @@ func TestIsEligibleToPostMaxPostsPerDay(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			acc := Account{Name: "acc", MaxPostsPerDay: tt.limit}
-			eligible, reason := acc.IsEligibleToPost(now, tt.todayCount, nil)
+			eligible, reason, retryable := acc.IsEligibleToPost(now, tt.todayCount, nil)
 			if eligible != tt.wantElig {
 				t.Errorf("limit=%d count=%d: got eligible=%v reason=%q, want eligible=%v", tt.limit, tt.todayCount, eligible, reason, tt.wantElig)
 			}
 			if !eligible && reason == "" {
 				t.Error("expected a non-empty reason when ineligible")
+			}
+			if !eligible && retryable {
+				t.Error("expected daily limit block to be non-retryable (won't clear again today)")
 			}
 		})
 	}
@@ -66,9 +69,12 @@ func TestIsEligibleToPostActiveHours(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			acc := Account{Name: "acc", ActiveHoursStart: tt.start, ActiveHoursEnd: tt.end}
-			eligible, reason := acc.IsEligibleToPost(tt.now, 0, nil)
+			eligible, reason, retryable := acc.IsEligibleToPost(tt.now, 0, nil)
 			if eligible != tt.wantElig {
 				t.Errorf("window=%s-%s now=%s: got eligible=%v reason=%q, want eligible=%v", tt.start, tt.end, tt.now, eligible, reason, tt.wantElig)
+			}
+			if !eligible && !retryable {
+				t.Error("expected active-hours block to be retryable (window reopens later)")
 			}
 		})
 	}
@@ -93,9 +99,12 @@ func TestIsEligibleToPostMinDelay(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			acc := Account{Name: "acc", MinDelayMinutes: tt.minDelay}
-			eligible, reason := acc.IsEligibleToPost(now, 0, tt.lastPostTime)
+			eligible, reason, retryable := acc.IsEligibleToPost(now, 0, tt.lastPostTime)
 			if eligible != tt.wantElig {
 				t.Errorf("minDelay=%d lastPost=%v: got eligible=%v reason=%q, want eligible=%v", tt.minDelay, tt.lastPostTime, eligible, reason, tt.wantElig)
+			}
+			if !eligible && !retryable {
+				t.Error("expected min-delay block to be retryable (delay elapses later)")
 			}
 		})
 	}

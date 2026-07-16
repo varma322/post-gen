@@ -169,6 +169,22 @@ func (p *Pool) migrate(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_queued_products_status ON queued_products(status);
 	CREATE INDEX IF NOT EXISTS idx_job_items_job_id ON job_items(job_id);
 	CREATE INDEX IF NOT EXISTS idx_job_items_status ON job_items(status);
+
+	-- Each account can maintain its own dedicated pool of links, separate from
+	-- the shared queued_products pool. A link's availability as a candidate is
+	-- derived from published_posts (has it ever been posted for this account?)
+	-- rather than a stored status flag, so it never needs to be reconciled with
+	-- job outcomes - the same pattern queued_products/GetCandidateProductsForAccount
+	-- already uses.
+	CREATE TABLE IF NOT EXISTS account_links (
+		id                   SERIAL PRIMARY KEY,
+		account_name         VARCHAR(255) NOT NULL,
+		url                  TEXT NOT NULL,
+		created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE (account_name, url)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_account_links_account_name ON account_links(account_name);
 	`
 	_, err := p.pool.Exec(ctx, schema)
 	return err
@@ -620,6 +636,82 @@ func (p *Pool) GetCandidateProductsForAccount(ctx context.Context, accountName s
 		products = append(products, qp)
 	}
 	return products, nil
+}
+
+// AddAccountLink adds a URL to an account's dedicated link pool. A duplicate
+// (account_name, url) pair is silently ignored rather than treated as an error,
+// since re-pasting the same batch of links is a normal, harmless user action.
+func (p *Pool) AddAccountLink(ctx context.Context, accountName, url string) error {
+	_, err := p.pool.Exec(ctx, `
+		INSERT INTO account_links (account_name, url) VALUES ($1, $2)
+		ON CONFLICT (account_name, url) DO NOTHING
+	`, accountName, url)
+	return err
+}
+
+// GetAccountLinks returns every link in an account's pool, newest first, each
+// flagged with whether it has already been published for that account.
+func (p *Pool) GetAccountLinks(ctx context.Context, accountName string) ([]models.AccountLink, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT al.id, al.account_name, al.url, al.created_at,
+		       EXISTS (
+		           SELECT 1 FROM published_posts pp
+		           WHERE pp.account_name = al.account_name AND pp.product_url = al.url
+		       ) AS posted
+		FROM account_links al
+		WHERE al.account_name = $1
+		ORDER BY al.created_at DESC
+	`, accountName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var links []models.AccountLink
+	for rows.Next() {
+		var link models.AccountLink
+		if err := rows.Scan(&link.ID, &link.AccountName, &link.URL, &link.CreatedAt, &link.Posted); err != nil {
+			return nil, err
+		}
+		links = append(links, link)
+	}
+	return links, nil
+}
+
+// DeleteAccountLink removes a single link from an account's pool by id.
+func (p *Pool) DeleteAccountLink(ctx context.Context, id int) error {
+	_, err := p.pool.Exec(ctx, `DELETE FROM account_links WHERE id = $1`, id)
+	return err
+}
+
+// GetCandidateAccountLinks returns up to limit links from the account's
+// dedicated pool that have not yet been published for that account, oldest
+// first (FIFO), so TriggerAutoPostJob works through a pool in submission order.
+func (p *Pool) GetCandidateAccountLinks(ctx context.Context, accountName string, limit int) ([]models.AccountLink, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT id, account_name, url, created_at
+		FROM account_links
+		WHERE account_name = $1
+		  AND url NOT IN (
+		      SELECT product_url FROM published_posts WHERE account_name = $1
+		  )
+		ORDER BY created_at ASC
+		LIMIT $2
+	`, accountName, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var links []models.AccountLink
+	for rows.Next() {
+		var link models.AccountLink
+		if err := rows.Scan(&link.ID, &link.AccountName, &link.URL, &link.CreatedAt); err != nil {
+			return nil, err
+		}
+		links = append(links, link)
+	}
+	return links, nil
 }
 
 // CountPostsTodayForAccount returns how many posts the given account has

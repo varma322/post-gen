@@ -21,6 +21,9 @@ type Generator interface {
 	AddQueuedProduct(ctx context.Context, url string) error
 	GetQueuedProducts(ctx context.Context) ([]models.QueuedProduct, error)
 	DeleteQueuedProduct(ctx context.Context, id int) error
+	AddAccountLink(ctx context.Context, accountName, url string) error
+	GetAccountLinks(ctx context.Context, accountName string) ([]models.AccountLink, error)
+	DeleteAccountLink(ctx context.Context, id int) error
 	TriggerAutoPostJob(ctx context.Context) (int, error)
 	GetActiveJob(ctx context.Context) (*models.PublicationJob, error)
 	CancelActiveJobs(ctx context.Context) error
@@ -89,6 +92,10 @@ type updateTemplateRequest struct {
 type server struct {
 	engine       Generator
 	templatesDir string
+}
+
+type accountLinkRequest struct {
+	URL string `json:"url"`
 }
 
 type affiliateLinkRequest struct {

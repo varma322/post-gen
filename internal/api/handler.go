@@ -110,12 +110,18 @@ func (s server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s server) handleAccountByName(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimPrefix(r.URL.Path, "/accounts/")
-	if name == "" {
+	rest := strings.TrimPrefix(r.URL.Path, "/accounts/")
+	if rest == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account name is required"})
 		return
 	}
 
+	if name, sub, ok := strings.Cut(rest, "/links"); ok {
+		s.handleAccountLinks(w, r, name, strings.TrimPrefix(sub, "/"))
+		return
+	}
+
+	name := rest
 	switch r.Method {
 	case http.MethodPut:
 		s.handleUpdateAccount(w, r, name)
@@ -123,6 +129,67 @@ func (s server) handleAccountByName(w http.ResponseWriter, r *http.Request) {
 		s.handleDeleteAccount(w, name)
 	default:
 		methodNotAllowed(w, http.MethodPut+", "+http.MethodDelete)
+	}
+}
+
+// handleAccountLinks serves an account's dedicated link pool at
+// /accounts/{name}/links (GET, POST) and /accounts/{name}/links/{id} (DELETE).
+func (s server) handleAccountLinks(w http.ResponseWriter, r *http.Request, name, idPart string) {
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account name is required"})
+		return
+	}
+
+	if idPart != "" {
+		if r.Method != http.MethodDelete {
+			methodNotAllowed(w, http.MethodDelete)
+			return
+		}
+		id, err := strconv.Atoi(idPart)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid link id"})
+			return
+		}
+		if err := s.engine.DeleteAccountLink(r.Context(), id); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		links, err := s.engine.GetAccountLinks(r.Context(), name)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"links": links})
+	case http.MethodPost:
+		defer r.Body.Close()
+		var req accountLinkRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON payload"})
+			return
+		}
+		req.URL = strings.TrimSpace(req.URL)
+		if req.URL == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "url is required"})
+			return
+		}
+		if err := s.engine.AddAccountLink(r.Context(), name, req.URL); err != nil {
+			var accountErr core.AccountNotFoundError
+			if errors.As(err, &accountErr) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{"status": "added"})
+	default:
+		methodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
 	}
 }
 

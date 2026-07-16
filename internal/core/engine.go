@@ -546,7 +546,46 @@ func (e *Engine) DeleteQueuedProduct(ctx context.Context, id int) error {
 	return e.db.DeleteQueuedProduct(ctx, id)
 }
 
-// TriggerAutoPostJob selects random unposted products for each active account and creates a job.
+// AddAccountLink validates a URL and adds it to the given account's dedicated
+// link pool. Unlike AddQueuedProduct, it does not eagerly scrape the URL:
+// account pools are meant for pasting many links at once, and the worker
+// already scrapes each URL right before it publishes it.
+func (e *Engine) AddAccountLink(ctx context.Context, accountName, rawURL string) error {
+	if e.db == nil {
+		return fmt.Errorf("database required for account link pools")
+	}
+	if _, err := e.resolveAccounts([]string{accountName}); err != nil {
+		return err
+	}
+
+	urlNormalized := utils.NormalizeURL(rawURL)
+	if !scraper.IsValidURL(urlNormalized) {
+		return fmt.Errorf("invalid URL format: %s", urlNormalized)
+	}
+
+	return e.db.AddAccountLink(ctx, accountName, urlNormalized)
+}
+
+// GetAccountLinks retrieves every link in the given account's dedicated pool.
+func (e *Engine) GetAccountLinks(ctx context.Context, accountName string) ([]models.AccountLink, error) {
+	if e.db == nil {
+		return nil, fmt.Errorf("database required for account link pools")
+	}
+	return e.db.GetAccountLinks(ctx, accountName)
+}
+
+// DeleteAccountLink removes a single link from an account's pool by id.
+func (e *Engine) DeleteAccountLink(ctx context.Context, id int) error {
+	if e.db == nil {
+		return fmt.Errorf("database required for account link pools")
+	}
+	return e.db.DeleteAccountLink(ctx, id)
+}
+
+// TriggerAutoPostJob builds a job that, for each eligible active account,
+// draws links preferentially from that account's own dedicated link pool
+// (falling back to the shared product queue for any shortfall) up to however
+// many posts it still has left in its daily quota, and creates a job.
 func (e *Engine) TriggerAutoPostJob(ctx context.Context) (int, error) {
 	if e.db == nil {
 		return 0, fmt.Errorf("database required for auto post jobs")
@@ -581,45 +620,78 @@ func (e *Engine) TriggerAutoPostJob(ctx context.Context) (int, error) {
 	usedURLs := make(map[string]bool)
 
 	for _, acc := range activeAccounts {
-		if eligible, reason := e.checkAccountEligibility(ctx, acc, time.Now()); !eligible {
+		if eligible, reason, _ := e.checkAccountEligibility(ctx, acc, time.Now()); !eligible {
 			log.Printf("[INFO] Skipping account %s: %s", acc.Name, reason)
 			continue
 		}
 
-		// Get candidates that haven't been posted to this account yet
-		candidates, err := e.db.GetCandidateProductsForAccount(ctx, acc.Name)
-		if err != nil {
-			log.Printf("[WARN] Failed to get candidates for account %s: %v", acc.Name, err)
+		batchSize := e.accountBatchSize(ctx, acc)
+		if batchSize == 0 {
+			log.Printf("[INFO] Skipping account %s: daily post quota already filled", acc.Name)
 			continue
 		}
 
-		// Pick a candidate that hasn't been used in this job run yet
-		var selected *models.QueuedProduct
-		for i := range candidates {
-			if !usedURLs[candidates[i].URL] {
-				selected = &candidates[i]
-				break
+		assignedForAccount := make(map[string]bool, batchSize)
+		added := 0
+
+		// Prefer the account's own dedicated link pool.
+		poolLinks, err := e.db.GetCandidateAccountLinks(ctx, acc.Name, batchSize)
+		if err != nil {
+			log.Printf("[WARN] Failed to get pool links for account %s: %v", acc.Name, err)
+		}
+		for _, link := range poolLinks {
+			assignedForAccount[link.URL] = true
+			usedURLs[link.URL] = true
+			jobItems = append(jobItems, models.JobItem{AccountName: acc.Name, ProductURL: link.URL})
+			added++
+		}
+
+		// Fall back to the shared product queue for any remaining shortfall.
+		if added < batchSize {
+			candidates, err := e.db.GetCandidateProductsForAccount(ctx, acc.Name)
+			if err != nil {
+				log.Printf("[WARN] Failed to get candidates for account %s: %v", acc.Name, err)
+				candidates = nil
+			}
+
+			// First pass: prefer URLs not already claimed by another account this run.
+			for i := range candidates {
+				if added >= batchSize {
+					break
+				}
+				url := candidates[i].URL
+				if assignedForAccount[url] || usedURLs[url] {
+					continue
+				}
+				assignedForAccount[url] = true
+				usedURLs[url] = true
+				jobItems = append(jobItems, models.JobItem{AccountName: acc.Name, ProductURL: url})
+				added++
+			}
+
+			// Second pass: rather than leave the account short a post, allow
+			// reusing a URL already claimed by a different account this run.
+			for i := range candidates {
+				if added >= batchSize {
+					break
+				}
+				url := candidates[i].URL
+				if assignedForAccount[url] {
+					continue
+				}
+				assignedForAccount[url] = true
+				jobItems = append(jobItems, models.JobItem{AccountName: acc.Name, ProductURL: url})
+				added++
 			}
 		}
 
-		// If all candidates are used in this run, allow duplicate across accounts for this run
-		if selected == nil && len(candidates) > 0 {
-			selected = &candidates[0]
-		}
-
-		if selected != nil {
-			usedURLs[selected.URL] = true
-			jobItems = append(jobItems, models.JobItem{
-				AccountName: acc.Name,
-				ProductURL:  selected.URL,
-			})
-		} else {
-			log.Printf("[INFO] Skipping account %s: no unposted products available in queue", acc.Name)
+		if added == 0 {
+			log.Printf("[INFO] Skipping account %s: no unposted links available in its pool or the shared queue", acc.Name)
 		}
 	}
 
 	if len(jobItems) == 0 {
-		return 0, fmt.Errorf("no unposted products available in queue for any active account")
+		return 0, fmt.Errorf("no unposted links available for any active account")
 	}
 
 	// 4. Create the job in the database
@@ -633,22 +705,46 @@ func (e *Engine) TriggerAutoPostJob(ctx context.Context) (int, error) {
 	return jobID, nil
 }
 
+// accountBatchSize returns how many links TriggerAutoPostJob should try to
+// assign to acc in this run: its full remaining daily quota if MaxPostsPerDay
+// is set, or 1 (the pre-existing behavior) for uncapped accounts, so an
+// unlimited account doesn't get an unbounded number of items queued at once.
+// On a transient error counting today's posts, it fails open to 1.
+func (e *Engine) accountBatchSize(ctx context.Context, acc models.Account) int {
+	if acc.MaxPostsPerDay <= 0 {
+		return 1
+	}
+
+	todayCount, err := e.db.CountPostsTodayForAccount(ctx, acc.Name)
+	if err != nil {
+		log.Printf("[WARN] Failed to count today's posts for account %s: %v", acc.Name, err)
+		return 1
+	}
+
+	remaining := acc.MaxPostsPerDay - todayCount
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
 // checkAccountEligibility evaluates an account's per-account scheduling and
 // rate-limit rules for the auto-post pipeline. It is only called from the
 // DB-backed auto-post job flow (TriggerAutoPostJob, Worker), so e.db is
 // assumed non-nil. On a transient error fetching post history, it logs and
 // fails open (treats the account as eligible) rather than blocking the run.
-func (e *Engine) checkAccountEligibility(ctx context.Context, acc models.Account, now time.Time) (bool, string) {
+// The retryable return value is meaningless when eligible is true.
+func (e *Engine) checkAccountEligibility(ctx context.Context, acc models.Account, now time.Time) (eligible bool, reason string, retryable bool) {
 	todayCount, err := e.db.CountPostsTodayForAccount(ctx, acc.Name)
 	if err != nil {
 		log.Printf("[WARN] Failed to count today's posts for account %s: %v", acc.Name, err)
-		return true, ""
+		return true, "", true
 	}
 
 	lastPostTime, err := e.db.GetLastPublishedAtForAccount(ctx, acc.Name)
 	if err != nil {
 		log.Printf("[WARN] Failed to get last published time for account %s: %v", acc.Name, err)
-		return true, ""
+		return true, "", true
 	}
 
 	return acc.IsEligibleToPost(now, todayCount, lastPostTime)

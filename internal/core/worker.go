@@ -110,37 +110,63 @@ func (w *Worker) processNextJobItem() {
 		job.Status = "running"
 	}
 
+	// Scan pending items for the first one whose account is eligible to post
+	// right now, rather than always taking the first pending item in the job.
+	// An item blocked by a retryable reason (outside active hours, minimum
+	// delay not yet elapsed) is left pending for a later tick instead of
+	// stalling every other account's items behind it; an item whose account
+	// has permanently exhausted its daily quota is given up on immediately.
+	now := time.Now()
 	var nextItem *models.JobItem
+	var nextAcc models.Account
+	anyPending := false
+
 	for i := range job.Items {
-		if job.Items[i].Status == "pending" {
-			nextItem = &job.Items[i]
-			break
+		item := &job.Items[i]
+		if item.Status != "pending" {
+			continue
 		}
+
+		resolvedAccounts, err := w.engine.resolveAccounts([]string{item.AccountName})
+		if err != nil || len(resolvedAccounts) == 0 {
+			errMsg := fmt.Sprintf("Account resolution error: %v", err)
+			_ = w.engine.db.UpdateJobItemStatus(ctx, item.ID, "failed", errMsg, nil)
+			item.Status = "failed"
+			continue
+		}
+		acc := resolvedAccounts[0]
+
+		eligible, reason, retryable := w.engine.checkAccountEligibility(ctx, acc, now)
+		if eligible {
+			if nextItem == nil {
+				nextItem = item
+				nextAcc = acc
+			}
+			anyPending = true
+			continue
+		}
+		if !retryable {
+			log.Printf("[INFO] Item %d permanently skipped: %s", item.ID, reason)
+			_ = w.engine.db.UpdateJobItemStatus(ctx, item.ID, "skipped", reason, nil)
+			item.Status = "skipped"
+			continue
+		}
+		// Retryable block - leave pending and revisit on a later tick.
+		anyPending = true
 	}
 
 	if nextItem == nil {
-		log.Printf("[INFO] Publication job %d completed successfully.", job.ID)
-		if err := w.engine.db.UpdateJobStatus(ctx, job.ID, "completed"); err != nil {
-			log.Printf("[ERR] Failed to complete job %d: %v", job.ID, err)
+		if !anyPending {
+			log.Printf("[INFO] Publication job %d completed successfully.", job.ID)
+			if err := w.engine.db.UpdateJobStatus(ctx, job.ID, "completed"); err != nil {
+				log.Printf("[ERR] Failed to complete job %d: %v", job.ID, err)
+			}
 		}
 		return
 	}
+	acc := nextAcc
 
 	log.Printf("[INFO] Worker publishing item %d (Account: %s, URL: %s)", nextItem.ID, nextItem.AccountName, nextItem.ProductURL)
-
-	resolvedAccounts, err := w.engine.resolveAccounts([]string{nextItem.AccountName})
-	if err != nil || len(resolvedAccounts) == 0 {
-		errMsg := fmt.Sprintf("Account resolution error: %v", err)
-		_ = w.engine.db.UpdateJobItemStatus(ctx, nextItem.ID, "failed", errMsg, nil)
-		return
-	}
-	acc := resolvedAccounts[0]
-
-	if eligible, reason := w.engine.checkAccountEligibility(ctx, acc, time.Now()); !eligible {
-		log.Printf("[INFO] Item %d skipped: %s", nextItem.ID, reason)
-		_ = w.engine.db.UpdateJobItemStatus(ctx, nextItem.ID, "skipped", reason, nil)
-		return
-	}
 
 	if err := w.engine.db.UpdateJobItemStatus(ctx, nextItem.ID, "publishing", "", nil); err != nil {
 		log.Printf("[ERR] Failed to set status to publishing for item %d: %v", nextItem.ID, err)
@@ -212,8 +238,8 @@ func (w *Worker) processNextJobItem() {
 		return
 	}
 
-	now := time.Now()
-	if err := w.engine.db.UpdateJobItemStatus(ctx, nextItem.ID, "published", "", &now); err != nil {
+	publishedAt := time.Now()
+	if err := w.engine.db.UpdateJobItemStatus(ctx, nextItem.ID, "published", "", &publishedAt); err != nil {
 		log.Printf("[ERR] Failed to update job item to published: %v", err)
 	}
 

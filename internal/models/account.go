@@ -49,9 +49,16 @@ func (a Account) IsActive() bool {
 // posts this account has already published today; lastPostTime is when it
 // last published (nil if never). It returns false with a human-readable
 // reason for the first rule that is violated, or true if the account may post.
-func (a Account) IsEligibleToPost(now time.Time, todayCount int, lastPostTime *time.Time) (bool, string) {
+//
+// The third return value, retryable, distinguishes a block that will clear on
+// its own later today (outside the active-hours window, or the minimum delay
+// between posts hasn't elapsed yet) from one that won't (the daily post limit
+// has already been reached). Callers pacing a queue of multiple pending posts
+// for this account use it to decide whether to leave an item pending for a
+// later retry or give up on it for the rest of the day.
+func (a Account) IsEligibleToPost(now time.Time, todayCount int, lastPostTime *time.Time) (eligible bool, reason string, retryable bool) {
 	if a.MaxPostsPerDay > 0 && todayCount >= a.MaxPostsPerDay {
-		return false, fmt.Sprintf("Daily limit of %d posts reached", a.MaxPostsPerDay)
+		return false, fmt.Sprintf("Daily limit of %d posts reached", a.MaxPostsPerDay), false
 	}
 
 	if a.ActiveHoursStart != "" && a.ActiveHoursEnd != "" {
@@ -67,7 +74,7 @@ func (a Account) IsEligibleToPost(now time.Time, todayCount int, lastPostTime *t
 				inWindow = cur >= start || cur <= end
 			}
 			if !inWindow {
-				return false, fmt.Sprintf("Outside active posting window %s-%s", a.ActiveHoursStart, a.ActiveHoursEnd)
+				return false, fmt.Sprintf("Outside active posting window %s-%s", a.ActiveHoursStart, a.ActiveHoursEnd), true
 			}
 		}
 	}
@@ -75,11 +82,11 @@ func (a Account) IsEligibleToPost(now time.Time, todayCount int, lastPostTime *t
 	if a.MinDelayMinutes > 0 && lastPostTime != nil {
 		minDelay := time.Duration(a.MinDelayMinutes) * time.Minute
 		if elapsed := now.Sub(*lastPostTime); elapsed < minDelay {
-			return false, fmt.Sprintf("Minimum delay of %d minutes between posts not met", a.MinDelayMinutes)
+			return false, fmt.Sprintf("Minimum delay of %d minutes between posts not met", a.MinDelayMinutes), true
 		}
 	}
 
-	return true, ""
+	return true, "", true
 }
 
 // parseMinutesOfDay parses a "HH:MM" 24-hour time string into minutes since midnight.
