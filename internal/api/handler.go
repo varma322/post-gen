@@ -92,6 +92,7 @@ func (s server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		Status:          "ok",
 		DBConnected:     dbConnected,
 		ActiveJob:       activeJob,
+		EventsDropped:   s.engine.Events().Dropped(),
 		CircuitBreakers: breakers,
 	}
 

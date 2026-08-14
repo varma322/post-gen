@@ -11,7 +11,11 @@ type PublishedPost struct {
 	ProductTitle   string    `json:"product_title"`
 	ProductURL     string    `json:"product_url"`
 	Content        string    `json:"content"`
-	CreatedAt      time.Time `json:"created_at"`
+	// Permalink is the canonical public URL as reported by Graph. It cannot be
+	// reconstructed from FacebookPostID for pages on the New Pages Experience,
+	// whose permalinks use an actor id distinct from the page id.
+	Permalink string    `json:"permalink,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Stats holds aggregated statistics for the dashboard.

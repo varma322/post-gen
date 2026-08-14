@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
+	"post-gen/internal/events"
 	"post-gen/internal/models"
 	"time"
 
@@ -185,6 +187,41 @@ func (p *Pool) migrate(ctx context.Context) error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_account_links_account_name ON account_links(account_name);
+
+	-- Append-only pipeline event log. Every stage writes here; nothing ever
+	-- updates a row. Events sharing a trace_id belong to one pipeline run, so
+	-- the full history of a single post is one indexed lookup.
+	--
+	-- Queue history and generation history are deliberately NOT separate
+	-- tables: both are derivable by joining this log against job_items and
+	-- published_posts, and a derived view can never drift from what actually
+	-- happened the way a stored status column can.
+	CREATE TABLE IF NOT EXISTS events (
+		id                   BIGSERIAL PRIMARY KEY,
+		event_type           VARCHAR(40) NOT NULL,
+		level                VARCHAR(8)  NOT NULL,
+		source               VARCHAR(30) NOT NULL,
+		trace_id             TEXT        NOT NULL,
+		account_name         VARCHAR(255),
+		product_url          TEXT,
+		job_id               INT,
+		job_item_id          INT,
+		message              TEXT,
+		duration_ms          INT,
+		metadata             JSONB,
+		created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_events_created_at      ON events(created_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_events_level_created   ON events(level, created_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_events_type_created    ON events(event_type, created_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_events_account_created ON events(account_name, created_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_events_trace           ON events(trace_id);
+
+	-- Facebook's own permalink for a published post. Reconstructing it from
+	-- facebook_post_id produces a dead URL for pages on the New Pages
+	-- Experience, whose permalinks use a different actor id than the page id.
+	ALTER TABLE published_posts ADD COLUMN IF NOT EXISTS permalink TEXT;
 	`
 	_, err := p.pool.Exec(ctx, schema)
 	return err
@@ -322,8 +359,8 @@ func getenv(key, fallback string) string {
 // RecordPublishedPost saves a post publication record.
 func (p *Pool) RecordPublishedPost(ctx context.Context, post models.PublishedPost) error {
 	_, err := p.pool.Exec(ctx, `
-		INSERT INTO published_posts (account_name, facebook_page_id, facebook_post_id, product_title, product_url, content, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO published_posts (account_name, facebook_page_id, facebook_post_id, product_title, product_url, content, permalink, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`,
 		post.AccountName,
 		post.FacebookPageID,
@@ -331,6 +368,7 @@ func (p *Pool) RecordPublishedPost(ctx context.Context, post models.PublishedPos
 		post.ProductTitle,
 		post.ProductURL,
 		post.Content,
+		nullIfEmpty(post.Permalink),
 		post.CreatedAt,
 	)
 	return err
@@ -813,4 +851,68 @@ func (p *Pool) GetLastPublishedAtForAccount(ctx context.Context, accountName str
 		return nil, err
 	}
 	return &createdAt, nil
+}
+
+// InsertEvents writes a batch of pipeline events. It satisfies events.Sink.
+//
+// Failures here are reported to the caller but are never allowed to propagate
+// into the pipeline - events.Logger logs and discards them, because telemetry
+// must not be able to fail a publish.
+func (p *Pool) InsertEvents(ctx context.Context, batch []events.Event) error {
+	if len(batch) == 0 {
+		return nil
+	}
+
+	b := &pgx.Batch{}
+	for _, e := range batch {
+		var metadata []byte
+		if len(e.Metadata) > 0 {
+			encoded, err := json.Marshal(e.Metadata)
+			if err != nil {
+				// A single unencodable metadata map shouldn't cost us the
+				// event itself - drop the metadata and keep the record.
+				log.Printf("[WARN] Dropping metadata for %s event: %v", e.Type, err)
+			} else {
+				metadata = encoded
+			}
+		}
+
+		var durationMS *int
+		if e.Duration > 0 {
+			ms := int(e.Duration.Milliseconds())
+			durationMS = &ms
+		}
+
+		b.Queue(`
+			INSERT INTO events (
+				event_type, level, source, trace_id, account_name, product_url,
+				job_id, job_item_id, message, duration_ms, metadata, created_at
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		`,
+			string(e.Type), string(e.Level), e.Source, e.TraceID,
+			nullIfEmpty(e.Account), nullIfEmpty(e.ProductURL),
+			e.JobID, e.JobItemID, nullIfEmpty(e.Message), durationMS,
+			metadata, e.CreatedAt,
+		)
+	}
+
+	results := p.pool.SendBatch(ctx, b)
+	defer results.Close()
+
+	for range batch {
+		if _, err := results.Exec(); err != nil {
+			return fmt.Errorf("inserting event batch: %w", err)
+		}
+	}
+	return nil
+}
+
+// nullIfEmpty maps an empty string to a SQL NULL, so optional columns stay
+// genuinely empty rather than holding zero-length strings that then have to be
+// special-cased in every filter and aggregate.
+func nullIfEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }

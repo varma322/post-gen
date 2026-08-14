@@ -38,6 +38,9 @@ func main() {
 		log.Fatalf("[ERR] Bootstrapping engine: %v", err)
 	}
 
+	// Run returns on signal, so this flushes buffered events on a clean exit.
+	defer engine.Close()
+
 	postgenBot, err := bot.New(engine)
 	if err != nil {
 		log.Fatalf("[ERR] Starting Telegram bot: %v", err)

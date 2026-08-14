@@ -60,6 +60,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("[ERR] Bootstrapping engine: %v", err)
 	}
+	// The CLI is short-lived, so without this the buffered tail of the event
+	// log would be lost every run.
+	defer engine.Close()
 
 	if *serveMode {
 		if token == "" {

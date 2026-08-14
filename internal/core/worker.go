@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"post-gen/internal/events"
 	"post-gen/internal/models"
 	"post-gen/internal/utils"
 	"strings"
@@ -73,6 +74,21 @@ func (w *Worker) run() {
 	}
 }
 
+// tallyItems counts a finished job's outcomes for the JOB_COMPLETED summary.
+func tallyItems(items []models.JobItem) (published, failed, skipped int) {
+	for _, item := range items {
+		switch item.Status {
+		case "published":
+			published++
+		case "failed":
+			failed++
+		case "skipped":
+			skipped++
+		}
+	}
+	return published, failed, skipped
+}
+
 func (w *Worker) processNextJobItem() {
 	w.mu.Lock()
 	if w.isProcessing {
@@ -108,6 +124,15 @@ func (w *Worker) processNextJobItem() {
 			return
 		}
 		job.Status = "running"
+
+		w.engine.events.Emit(events.Event{
+			Type:     events.JobStarted,
+			Source:   events.SourceWorker,
+			TraceID:  events.NewTraceID(),
+			JobID:    &job.ID,
+			Message:  fmt.Sprintf("Worker picked up job %d (%d items)", job.ID, len(job.Items)),
+			Metadata: map[string]any{"item_count": len(job.Items)},
+		})
 	}
 
 	// Scan pending items for the first one whose account is eligible to post
@@ -149,6 +174,18 @@ func (w *Worker) processNextJobItem() {
 			log.Printf("[INFO] Item %d permanently skipped: %s", item.ID, reason)
 			_ = w.engine.db.UpdateJobItemStatus(ctx, item.ID, "skipped", reason, nil)
 			item.Status = "skipped"
+
+			w.engine.events.Emit(events.Event{
+				Type:       events.JobSkipped,
+				Source:     events.SourceWorker,
+				TraceID:    events.NewTraceID(),
+				Account:    acc.Name,
+				ProductURL: item.ProductURL,
+				JobID:      &job.ID,
+				JobItemID:  &item.ID,
+				Message:    reason,
+				Metadata:   map[string]any{"reason": "quota_exhausted"},
+			})
 			continue
 		}
 		// Retryable block - leave pending and revisit on a later tick.
@@ -161,10 +198,28 @@ func (w *Worker) processNextJobItem() {
 			if err := w.engine.db.UpdateJobStatus(ctx, job.ID, "completed"); err != nil {
 				log.Printf("[ERR] Failed to complete job %d: %v", job.ID, err)
 			}
+
+			published, failed, skipped := tallyItems(job.Items)
+			w.engine.events.Emit(events.Event{
+				Type:    events.JobCompleted,
+				Source:  events.SourceWorker,
+				TraceID: events.NewTraceID(),
+				JobID:   &job.ID,
+				Message: fmt.Sprintf("Job %d finished: %d published, %d failed, %d skipped", job.ID, published, failed, skipped),
+				Metadata: map[string]any{
+					"published": published,
+					"failed":    failed,
+					"skipped":   skipped,
+				},
+			})
 		}
 		return
 	}
 	acc := nextAcc
+
+	// One trace per item: scrape, enrichment, and publish for this item all
+	// carry it, so the Activity Log can show the item's full story in order.
+	traceID := events.NewTraceID()
 
 	log.Printf("[INFO] Worker publishing item %d (Account: %s, URL: %s)", nextItem.ID, nextItem.AccountName, nextItem.ProductURL)
 
@@ -173,12 +228,7 @@ func (w *Worker) processNextJobItem() {
 		return
 	}
 
-	scraperInstance, err := w.engine.scraperFactory(nextItem.ProductURL, w.engine.selectors)
-	var product *models.Product
-	if err == nil {
-		product, err = scraperInstance.Scrape(ctx, nextItem.ProductURL)
-	}
-
+	product, err := w.engine.scrapeWithEvents(ctx, traceID, acc.Name, nextItem.ProductURL)
 	if err != nil {
 		errMsg := fmt.Sprintf("Scrape error: %v", err)
 		log.Printf("[WARN] Item %d failed: %s", nextItem.ID, errMsg)
@@ -191,6 +241,18 @@ func (w *Worker) processNextJobItem() {
 		msg := "Product is out of stock or price is empty; skipped publication"
 		log.Printf("[INFO] Item %d skipped: %s", nextItem.ID, msg)
 		_ = w.engine.db.UpdateJobItemStatus(ctx, nextItem.ID, "skipped", msg, nil)
+
+		w.engine.events.Emit(events.Event{
+			Type:       events.JobSkipped,
+			Source:     events.SourceWorker,
+			TraceID:    traceID,
+			Account:    acc.Name,
+			ProductURL: nextItem.ProductURL,
+			JobID:      &job.ID,
+			JobItemID:  &nextItem.ID,
+			Message:    msg,
+			Metadata:   map[string]any{"reason": "out_of_stock"},
+		})
 		return
 	}
 
@@ -230,7 +292,11 @@ func (w *Worker) processNextJobItem() {
 		return
 	}
 
-	pubID, pubErr := w.engine.fbPublisher.PublishPagePost(acc.FacebookPageID, acc.FacebookAccessToken, postText)
+	published, pubErr := w.engine.publishWithEvents(ctx, traceID, acc, models.PublishedPost{
+		ProductTitle: productForAccount.Title,
+		ProductURL:   nextItem.ProductURL,
+		Content:      postText,
+	}, &nextItem.ID)
 	if pubErr != nil {
 		errMsg := fmt.Sprintf("Facebook publish error: %v", pubErr)
 		log.Printf("[ERR] Item %d Facebook API error: %s", nextItem.ID, errMsg)
@@ -243,16 +309,7 @@ func (w *Worker) processNextJobItem() {
 		log.Printf("[ERR] Failed to update job item to published: %v", err)
 	}
 
-	_ = w.engine.RecordPublishedPost(ctx, models.PublishedPost{
-		AccountName:    acc.Name,
-		FacebookPageID: acc.FacebookPageID,
-		FacebookPostID: pubID,
-		ProductTitle:   productForAccount.Title,
-		ProductURL:     nextItem.ProductURL,
-		Content:        postText,
-	})
-
-	log.Printf("[INFO] Item %d published successfully to page %s. PostID: %s", nextItem.ID, acc.FacebookPageID, pubID)
+	log.Printf("[INFO] Item %d published successfully to page %s. PostID: %s", nextItem.ID, acc.FacebookPageID, published.PostID)
 
 	select {
 	case <-w.stopChan:

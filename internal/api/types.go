@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"post-gen/internal/core"
+	"post-gen/internal/events"
 	"post-gen/internal/models"
 	"time"
 )
@@ -27,6 +28,7 @@ type Generator interface {
 	TriggerAutoPostJob(ctx context.Context, rotateOldLinks bool) (int, error)
 	GetActiveJob(ctx context.Context) (*models.PublicationJob, error)
 	CancelActiveJobs(ctx context.Context) error
+	Events() *events.Logger
 }
 
 type generateRequest struct {
@@ -119,8 +121,12 @@ type circuitBreakerStatus struct {
 }
 
 type healthResponse struct {
-	Status          string                 `json:"status"`
-	DBConnected     bool                   `json:"db_connected"`
-	ActiveJob       *models.PublicationJob `json:"active_job,omitempty"`
+	Status      string                 `json:"status"`
+	DBConnected bool                   `json:"db_connected"`
+	ActiveJob   *models.PublicationJob `json:"active_job,omitempty"`
+	// EventsDropped counts telemetry discarded because the event buffer was
+	// full. A non-zero value means the dashboard is showing an incomplete
+	// picture, so it needs to be visible rather than silently absorbed.
+	EventsDropped   uint64                 `json:"events_dropped"`
 	CircuitBreakers []circuitBreakerStatus `json:"circuit_breakers"`
 }

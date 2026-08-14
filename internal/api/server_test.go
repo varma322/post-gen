@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"post-gen/internal/events"
 	"strings"
 	"testing"
 	"time"
@@ -88,6 +89,12 @@ func (s stubGenerator) DeleteAccountLink(ctx context.Context, id int) error {
 
 func (s stubGenerator) TriggerAutoPostJob(ctx context.Context, rotateOldLinks bool) (int, error) {
 	return 0, nil
+}
+
+// Events returns a nil Logger, which is a valid no-op: Emit, Dropped, and
+// Close all handle a nil receiver, so handlers need no guard around it.
+func (s stubGenerator) Events() *events.Logger {
+	return nil
 }
 
 func (s stubGenerator) GetActiveJob(ctx context.Context) (*models.PublicationJob, error) {

@@ -226,21 +226,34 @@ func (s *AmazonCreatorAPIScraper) effectivePartnerTag() string {
 
 // Scrape implements the Scraper interface.
 func (s *AmazonCreatorAPIScraper) Scrape(ctx context.Context, rawURL string) (*models.Product, error) {
+	product, _, err := s.ScrapeWithMeta(ctx, rawURL)
+	return product, err
+}
+
+// ScrapeWithMeta implements MetaScraper, reporting whether the product came
+// from the Creators API or the HTML fallback, and why it fell back.
+func (s *AmazonCreatorAPIScraper) ScrapeWithMeta(ctx context.Context, rawURL string) (*models.Product, ScrapeMeta, error) {
 	// Resolve short URLs first so the marketplace (used to scope the circuit
 	// breaker below) can be determined.
 	resolvedURL := utils.ResolveAmazonShortURL(rawURL)
 	marketplace := getMarketplace(resolvedURL)
 	partnerTag := s.effectivePartnerTag()
 
+	// fellBack runs the HTML scraper and tags the result with why we're here.
+	fellBack := func(reason string) (*models.Product, ScrapeMeta, error) {
+		product, err := s.fallback.Scrape(ctx, rawURL)
+		return product, ScrapeMeta{Source: "html", FallbackReason: reason}, err
+	}
+
 	if creatorAPICircuitOpen(partnerTag, marketplace) {
-		return s.fallback.Scrape(ctx, rawURL)
+		return fellBack("circuit breaker open")
 	}
 
 	// Extract ASIN
 	asin := extractASIN(resolvedURL)
 	if asin == "" {
 		log.Printf("[WARN] Creators API: failed to extract ASIN from %s. Falling back to HTML scraping.", rawURL)
-		return s.fallback.Scrape(ctx, rawURL)
+		return fellBack("no ASIN in URL")
 	}
 
 	// Fetch from Creators API
@@ -249,17 +262,17 @@ func (s *AmazonCreatorAPIScraper) Scrape(ctx context.Context, rawURL string) (*m
 		if errors.Is(err, errCreatorsAPIIneligible) {
 			tripCreatorAPICircuit(partnerTag, marketplace, 1*time.Hour)
 			log.Printf("[WARN] Creators API: account not eligible for marketplace %s (partner tag rejected by Amazon). Disabling API for this partner tag/marketplace for 1 hour. Update AMAZON_CREATOR_PARTNER_TAG env var to an active Associates account tag.", marketplace)
-			return s.fallback.Scrape(ctx, rawURL)
+			return fellBack("associate not eligible")
 		}
 		if errors.Is(err, errCreatorsAPINetworkFailure) || strings.Contains(err.Error(), "no such host") || strings.Contains(err.Error(), "timeout") {
 			log.Printf("[ERR] Creators API failed due to network error: %v. Aborting HTML fallback to prevent CAPTCHA.", err)
-			return nil, err
+			return nil, ScrapeMeta{Source: "creators_api"}, err
 		}
 		log.Printf("[WARN] Creators API failed: %v. Falling back to HTML scraping.", err)
-		return s.fallback.Scrape(ctx, rawURL)
+		return fellBack("api error")
 	}
 
-	return product, nil
+	return product, ScrapeMeta{Source: "creators_api"}, nil
 }
 
 func (s *AmazonCreatorAPIScraper) fetchFromAPI(ctx context.Context, asin, marketplace, rawURL string) (*models.Product, error) {

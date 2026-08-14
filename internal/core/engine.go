@@ -8,6 +8,7 @@ import (
 	"post-gen/internal/ai"
 	"post-gen/internal/config"
 	"post-gen/internal/db"
+	"post-gen/internal/events"
 	"post-gen/internal/generator"
 	"post-gen/internal/models"
 	"post-gen/internal/publisher"
@@ -38,7 +39,16 @@ type Engine struct {
 	fbPublisher    *publisher.FacebookPublisher
 	aiEnricher     *ai.Enricher
 	db             *db.Pool
+	events         *events.Logger
 }
+
+// Events exposes the pipeline event logger so the API layer can report the
+// dropped-event count and callers can shut it down cleanly.
+func (e *Engine) Events() *events.Logger { return e.events }
+
+// Close flushes any buffered events. Callers that construct an Engine for the
+// life of a process should defer this so the tail of the log isn't lost on exit.
+func (e *Engine) Close() { e.events.Close() }
 
 // NewEngine loads the required configuration files and prepares an Engine.
 // If a DB pool is provided, accounts are loaded from PostgreSQL (with JSON fallback
@@ -87,6 +97,15 @@ func NewEngine(paths Paths, dbPool *db.Pool) (*Engine, error) {
 		}
 	}
 
+	// A nil *db.Pool assigned straight into the events.Sink interface would
+	// produce a non-nil interface wrapping a nil pointer, and every Emit would
+	// then panic inside InsertEvents. Only populate the sink when there really
+	// is a pool, so JSON-fallback mode gets a genuine no-op logger.
+	var sink events.Sink
+	if dbPool != nil {
+		sink = dbPool
+	}
+
 	return &Engine{
 		accounts:       accounts,
 		selectors:      selectors,
@@ -96,6 +115,7 @@ func NewEngine(paths Paths, dbPool *db.Pool) (*Engine, error) {
 		fbPublisher:    publisher.NewFacebookPublisher(),
 		aiEnricher:     ai.New(),
 		db:             dbPool,
+		events:         events.New(sink),
 	}, nil
 }
 
@@ -200,16 +220,11 @@ func (e *Engine) GeneratePostsWithPublish(ctx context.Context, urls []string, ac
 			continue
 		}
 
-		s, err := e.scraperFactory(url, e.selectors)
-		if err != nil {
-			results = append(results, Result{
-				URL:   url,
-				Error: err.Error(),
-			})
-			continue
-		}
+		// One trace per URL: every account's enrichment and publish for this
+		// product shares it, so the whole fan-out is retrievable as a unit.
+		traceID := events.NewTraceID()
 
-		product, err := s.Scrape(ctx, url)
+		product, err := e.scrapeWithEvents(ctx, traceID, "", url)
 		if err != nil {
 			results = append(results, Result{
 				URL:   url,
@@ -304,24 +319,16 @@ func (e *Engine) GeneratePostsWithPublish(ctx context.Context, urls []string, ac
 					}
 					publishAttempts++
 
-					pubID, pubErr := e.fbPublisher.PublishPagePost(
-						targetAccount.FacebookPageID,
-						targetAccount.FacebookAccessToken,
-						result.Output,
-					)
+					published, pubErr := e.publishWithEvents(ctx, traceID, targetAccount, models.PublishedPost{
+						ProductTitle: result.ProductTitle,
+						ProductURL:   result.URL,
+						Content:      result.Output,
+					}, nil)
 
 					if pubErr != nil {
 						result.PublishError = pubErr.Error()
 					} else {
-						result.PublishID = pubID
-						_ = e.RecordPublishedPost(ctx, models.PublishedPost{
-							AccountName:    targetAccount.Name,
-							FacebookPageID: targetAccount.FacebookPageID,
-							FacebookPostID: pubID,
-							ProductTitle:   result.ProductTitle,
-							ProductURL:     result.URL,
-							Content:        result.Output,
-						})
+						result.PublishID = published.PostID
 					}
 				}
 			}
@@ -347,38 +354,36 @@ func (e *Engine) PublishPost(accountName, postText string) (string, error) {
 		return "", fmt.Errorf("facebook credentials not configured for account %q", accountName)
 	}
 	
-	pubID, err := e.fbPublisher.PublishPagePost(account.FacebookPageID, account.FacebookAccessToken, postText)
-	if err != nil {
-		return "", err
-	}
-
+	// The caller hands us finished text and nothing else, so the product URL
+	// and title have to be recovered from the body. Best-effort by design:
+	// this only feeds the posted-state derivation and the dashboard's title
+	// column, never the post itself.
 	var productURL string
-	var productTitle string
-	words := strings.Fields(postText)
-	for _, word := range words {
+	for _, word := range strings.Fields(postText) {
 		if strings.HasPrefix(word, "http://") || strings.HasPrefix(word, "https://") {
 			productURL = word
 			break
 		}
 	}
-	lines := strings.Split(postText, "\n")
-	if len(lines) > 0 {
+
+	var productTitle string
+	if lines := strings.Split(postText, "\n"); len(lines) > 0 {
 		productTitle = strings.TrimSpace(lines[0])
 		if len(productTitle) > 100 {
 			productTitle = productTitle[:100] + "..."
 		}
 	}
 
-	_ = e.RecordPublishedPost(context.Background(), models.PublishedPost{
-		AccountName:    account.Name,
-		FacebookPageID: account.FacebookPageID,
-		FacebookPostID: pubID,
-		ProductTitle:   productTitle,
-		ProductURL:     productURL,
-		Content:        postText,
-	})
+	result, err := e.publishWithEvents(context.Background(), events.NewTraceID(), account, models.PublishedPost{
+		ProductTitle: productTitle,
+		ProductURL:   productURL,
+		Content:      postText,
+	}, nil)
+	if err != nil {
+		return "", err
+	}
 
-	return pubID, nil
+	return result.PostID, nil
 }
 
 func (e *Engine) resolveAccounts(accountNames []string) ([]models.Account, error) {
@@ -417,6 +422,134 @@ func (e *Engine) resolveAccounts(accountNames []string) ([]models.Account, error
 	}
 
 	return resolved, nil
+}
+
+// scrapeWithEvents performs a scrape bracketed by SCRAPE_STARTED and a
+// terminal SCRAPE_SUCCESS or SCRAPE_FAILED event, recording how long it took
+// and whether the Creators API had to fall back to HTML scraping.
+//
+// accountName may be empty for scrapes that aren't on behalf of one account,
+// such as adding a product to the shared queue.
+func (e *Engine) scrapeWithEvents(ctx context.Context, traceID, accountName, url string) (*models.Product, error) {
+	e.events.Emit(events.Event{
+		Type:       events.ScrapeStarted,
+		Source:     events.SourceAmazon,
+		TraceID:    traceID,
+		Account:    accountName,
+		ProductURL: url,
+		Message:    "Scrape started",
+	})
+
+	started := time.Now()
+
+	fail := func(err error) (*models.Product, error) {
+		e.events.Emit(events.Event{
+			Type:       events.ScrapeFailed,
+			Source:     events.SourceAmazon,
+			TraceID:    traceID,
+			Account:    accountName,
+			ProductURL: url,
+			Message:    err.Error(),
+			Duration:   time.Since(started),
+		})
+		return nil, err
+	}
+
+	s, err := e.scraperFactory(url, e.selectors)
+	if err != nil {
+		return fail(err)
+	}
+
+	product, meta, err := scraper.ScrapeReportingMeta(ctx, s, url)
+	if err != nil {
+		return fail(err)
+	}
+
+	e.events.Emit(events.Event{
+		Type:       events.ScrapeSuccess,
+		Source:     events.SourceAmazon,
+		TraceID:    traceID,
+		Account:    accountName,
+		ProductURL: url,
+		Message:    "Product scraped successfully",
+		Duration:   time.Since(started),
+		Metadata: map[string]any{
+			"scrape_source":   meta.Source,
+			"fallback_used":   meta.Fellback(),
+			"fallback_reason": meta.FallbackReason,
+			"product_title":   product.Title,
+			"price":           product.DealPrice,
+		},
+	})
+
+	return product, nil
+}
+
+// publishWithEvents posts to the account's Facebook Page, bracketed by
+// POST_STARTED and a terminal POST_SUCCESS or POST_FAILED event, and records a
+// successful publish to published_posts.
+//
+// It is the single publish path for the interactive flow, the direct-publish
+// endpoint, and the background worker, so every route into Graph is logged the
+// same way and lands in published_posts with its permalink.
+func (e *Engine) publishWithEvents(ctx context.Context, traceID string, acc models.Account, post models.PublishedPost, jobItemID *int) (publisher.PublishResult, error) {
+	e.events.Emit(events.Event{
+		Type:       events.PostStarted,
+		Source:     events.SourceFacebook,
+		TraceID:    traceID,
+		Account:    acc.Name,
+		ProductURL: post.ProductURL,
+		JobItemID:  jobItemID,
+		Message:    "Publishing to Facebook",
+		Metadata:   map[string]any{"page_id": acc.FacebookPageID},
+	})
+
+	started := time.Now()
+
+	result, err := e.fbPublisher.PublishPagePost(acc.FacebookPageID, acc.FacebookAccessToken, post.Content)
+	if err != nil {
+		e.events.Emit(events.Event{
+			Type:       events.PostFailed,
+			Source:     events.SourceFacebook,
+			TraceID:    traceID,
+			Account:    acc.Name,
+			ProductURL: post.ProductURL,
+			JobItemID:  jobItemID,
+			Message:    err.Error(),
+			Duration:   time.Since(started),
+			Metadata:   map[string]any{"page_id": acc.FacebookPageID},
+		})
+		return publisher.PublishResult{}, err
+	}
+
+	post.AccountName = acc.Name
+	post.FacebookPageID = acc.FacebookPageID
+	post.FacebookPostID = result.PostID
+	post.Permalink = result.Permalink
+	if recErr := e.RecordPublishedPost(ctx, post); recErr != nil {
+		// The post is live; failing to record it is a bookkeeping problem, not
+		// a publish failure. Log it loudly - candidate selection derives
+		// "already posted" from this table, so a gap here means a repost.
+		log.Printf("[ERR] Published %s for %s but failed to record it: %v", result.PostID, acc.Name, recErr)
+	}
+
+	e.events.Emit(events.Event{
+		Type:       events.PostSuccess,
+		Source:     events.SourceFacebook,
+		TraceID:    traceID,
+		Account:    acc.Name,
+		ProductURL: post.ProductURL,
+		JobItemID:  jobItemID,
+		Message:    "Published to Facebook",
+		Duration:   time.Since(started),
+		Metadata: map[string]any{
+			"post_id":   result.PostID,
+			"permalink": result.Permalink,
+			"page_id":   acc.FacebookPageID,
+		},
+	})
+
+	return result, nil
 }
 
 // enrichBaseProduct applies default fallback values to fields not set by the scraper.
@@ -516,18 +649,30 @@ func (e *Engine) AddQueuedProduct(ctx context.Context, url string) error {
 		return fmt.Errorf("invalid URL format: %s", urlNormalized)
 	}
 
-	s, err := e.scraperFactory(urlNormalized, e.selectors)
-	if err != nil {
-		return fmt.Errorf("creating scraper: %w", err)
-	}
+	traceID := events.NewTraceID()
 
-	product, err := s.Scrape(ctx, urlNormalized)
+	product, err := e.scrapeWithEvents(ctx, traceID, "", urlNormalized)
 	if err != nil {
 		return fmt.Errorf("scraping product: %w", err)
 	}
 
-	// Queue it in the database
-	return e.db.AddQueuedProduct(ctx, urlNormalized, product.Title, product.DealPrice, product.ImageURL, *product)
+	if err := e.db.AddQueuedProduct(ctx, urlNormalized, product.Title, product.DealPrice, product.ImageURL, *product); err != nil {
+		return err
+	}
+
+	e.events.Emit(events.Event{
+		Type:       events.ProductQueued,
+		Source:     events.SourceQueue,
+		TraceID:    traceID,
+		ProductURL: urlNormalized,
+		Message:    "Product added to the shared queue",
+		Metadata: map[string]any{
+			"product_title": product.Title,
+			"price":         product.DealPrice,
+		},
+	})
+
+	return nil
 }
 
 // GetQueuedProducts retrieves all active queued products.
@@ -543,7 +688,19 @@ func (e *Engine) DeleteQueuedProduct(ctx context.Context, id int) error {
 	if e.db == nil {
 		return fmt.Errorf("database required for product queue")
 	}
-	return e.db.DeleteQueuedProduct(ctx, id)
+	if err := e.db.DeleteQueuedProduct(ctx, id); err != nil {
+		return err
+	}
+
+	e.events.Emit(events.Event{
+		Type:     events.ProductRemoved,
+		Source:   events.SourceQueue,
+		TraceID:  events.NewTraceID(),
+		Message:  fmt.Sprintf("Product %d removed from the shared queue", id),
+		Metadata: map[string]any{"product_id": id},
+	})
+
+	return nil
 }
 
 // AddAccountLink validates a URL and adds it to the given account's dedicated
@@ -748,6 +905,26 @@ func (e *Engine) TriggerAutoPostJob(ctx context.Context, rotateOldLinks bool) (i
 		}
 		return 0, err
 	}
+
+	perAccount := make(map[string]int, len(activeAccounts))
+	for _, item := range jobItems {
+		perAccount[item.AccountName]++
+	}
+
+	e.events.Emit(events.Event{
+		Type:    events.JobCreated,
+		Source:  events.SourceQueue,
+		TraceID: events.NewTraceID(),
+		JobID:   &jobID,
+		Message: fmt.Sprintf("Job %d created with %d item(s) across %d account(s)", jobID, len(jobItems), len(perAccount)),
+		Metadata: map[string]any{
+			"item_count":       len(jobItems),
+			"account_count":    len(perAccount),
+			"items_by_account": perAccount,
+			"rotate_old_links": rotateOldLinks,
+		},
+	})
+
 	return jobID, nil
 }
 
@@ -809,5 +986,28 @@ func (e *Engine) CancelActiveJobs(ctx context.Context) error {
 	if e.db == nil {
 		return fmt.Errorf("database required for auto post jobs")
 	}
-	return e.db.CancelActiveJobs(ctx)
+
+	// Read the job before cancelling so the event can name which one went.
+	var jobID *int
+	if job, err := e.db.GetActiveJob(ctx); err == nil && job != nil {
+		jobID = &job.ID
+	}
+
+	if err := e.db.CancelActiveJobs(ctx); err != nil {
+		return err
+	}
+
+	message := "Active job cancelled"
+	if jobID != nil {
+		message = fmt.Sprintf("Job %d cancelled", *jobID)
+	}
+	e.events.Emit(events.Event{
+		Type:    events.JobCancelled,
+		Source:  events.SourceQueue,
+		TraceID: events.NewTraceID(),
+		JobID:   jobID,
+		Message: message,
+	})
+
+	return nil
 }

@@ -47,6 +47,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("[ERR] Bootstrapping engine: %v", err)
 	}
+	defer engine.Close()
 
 	// Start background publication worker if PostgreSQL is connected
 	if dbPool != nil {
