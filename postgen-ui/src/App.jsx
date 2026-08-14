@@ -1,120 +1,186 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import './index.css';
-import Header from './components/Header';
-import Sidebar from './components/Sidebar';
+import AppShell from './layout/AppShell';
+
+import Dashboard from './screens/Dashboard';
+import ActivityLog from './screens/ActivityLog';
+import Analytics from './screens/Analytics';
+import Channels from './screens/Channels';
+import ContentQueue from './screens/ContentQueue';
 import Generator from './screens/Generator';
 import AutoPublisher from './screens/AutoPublisher';
-import PagesDashboard from './screens/PagesDashboard';
 import TemplatesManager from './screens/TemplatesManager';
 import AccountsManager from './screens/AccountsManager';
+import Settings from './screens/Settings';
+
+const WORKER_POLL_MS = 15000;
+
+/**
+ * Screens are addressed by URL hash, so a reload keeps you where you were and
+ * a screen can be linked to directly. Falls back to the dashboard for an
+ * unknown or absent hash.
+ */
+const VALID_TABS = new Set([
+  'dashboard', 'publisher', 'channels', 'analytics', 'queue',
+  'scheduler', 'activity', 'templates', 'accounts', 'settings',
+]);
+
+function tabFromHash() {
+  const hash = window.location.hash.replace(/^#\/?/, '');
+  return VALID_TABS.has(hash) ? hash : 'dashboard';
+}
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('dashboard');
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [apiToken, setApiToken] = useState(() => localStorage.getItem("postgen_api_token") || "");
+  const [activeTab, setActiveTab] = useState(tabFromHash);
+  const [apiToken, setApiToken] = useState(() => localStorage.getItem('postgen_api_token') || '');
   const [accounts, setAccounts] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [tokenStatus, setTokenStatus] = useState({ text: '', isError: false });
+  const [workerStatus, setWorkerStatus] = useState(null);
 
-  // Helper for API fetches with Bearer Token auth
-  const apiFetch = async (url, options = {}) => {
+  const apiFetch = useCallback(async (url, options = {}) => {
     const token = apiToken.trim();
     if (token) {
-      options.headers = options.headers || {};
-      options.headers["Authorization"] = "Bearer " + token;
+      options.headers = { ...(options.headers || {}), Authorization: `Bearer ${token}` };
     }
     const resp = await fetch(url, options);
     if (resp.status === 401) {
-      throw new Error("Unauthorized: Please verify your API Bearer Token");
+      throw new Error('Unauthorized: check the API bearer token in the sidebar');
     }
     return resp;
-  };
-
-  const loadAccounts = async () => {
-    try {
-      const resp = await apiFetch("/accounts");
-      if (!resp.ok) throw new Error("Failed to fetch accounts");
-      const data = await resp.json();
-      setAccounts(data.accounts || []);
-    } catch (err) {
-      console.error(err);
-      setTokenStatus({ text: "Error loading accounts: " + err.message, isError: true });
-    }
-  };
-
-  const loadTemplates = async () => {
-    try {
-      const resp = await apiFetch("/templates");
-      if (!resp.ok) throw new Error("Failed to fetch templates");
-      const data = await resp.json();
-      setTemplates(data.templates || []);
-    } catch (err) {
-      console.error(err);
-      setTokenStatus({ text: "Error loading templates: " + err.message, isError: true });
-    }
-  };
-
-  // Load accounts and templates on mount & token change
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount/token-change is intentional
-    loadAccounts();
-    loadTemplates();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiToken]);
 
+  const loadAccounts = useCallback(async () => {
+    try {
+      const resp = await apiFetch('/accounts');
+      if (!resp.ok) throw new Error('Failed to fetch accounts');
+      setAccounts((await resp.json()).accounts || []);
+    } catch (err) {
+      setTokenStatus({ text: err.message, isError: true });
+    }
+  }, [apiFetch]);
+
+  const loadTemplates = useCallback(async () => {
+    try {
+      const resp = await apiFetch('/templates');
+      if (!resp.ok) throw new Error('Failed to fetch templates');
+      setTemplates((await resp.json()).templates || []);
+    } catch (err) {
+      setTokenStatus({ text: err.message, isError: true });
+    }
+  }, [apiFetch]);
+
+  const loadWorkerStatus = useCallback(async () => {
+    try {
+      const resp = await apiFetch('/worker/status');
+      if (!resp.ok) return;
+      setWorkerStatus(await resp.json());
+    } catch {
+      // The worker badge is ambient; a failed poll should not raise an error
+      // banner over whatever screen the operator is actually using.
+    }
+  }, [apiFetch]);
+
+  useEffect(() => {
+    loadAccounts();
+    loadTemplates();
+    loadWorkerStatus();
+  }, [loadAccounts, loadTemplates, loadWorkerStatus]);
+
+  // Worker state drives the badge in the top bar on every screen, so it polls
+  // globally rather than per-screen. Paused while the tab is hidden.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (!document.hidden) loadWorkerStatus();
+    }, WORKER_POLL_MS);
+    return () => clearInterval(timer);
+  }, [loadWorkerStatus]);
+
+  // Keep the hash and the active screen in step, in both directions, so the
+  // back button and a pasted link both work.
+  const selectTab = useCallback((id) => {
+    setActiveTab(id);
+    if (tabFromHash() !== id) window.location.hash = `#/${id}`;
+  }, []);
+
+  useEffect(() => {
+    const onHashChange = () => setActiveTab(tabFromHash());
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
   const saveToken = () => {
-    localStorage.setItem("postgen_api_token", apiToken);
-    setTokenStatus({ text: "Token saved to local storage!", isError: false });
+    localStorage.setItem('postgen_api_token', apiToken);
+    setTokenStatus({ text: 'Token saved', isError: false });
     setTimeout(() => {
       setTokenStatus({ text: '', isError: false });
       loadAccounts();
       loadTemplates();
-    }, 1200);
+      loadWorkerStatus();
+    }, 1000);
   };
 
   return (
-    <div className="bg-surface text-on-surface antialiased min-h-screen flex flex-col font-body">
-      <Header
-        mobileMenuOpen={mobileMenuOpen}
-        onToggleMobileMenu={() => setMobileMenuOpen(v => !v)}
-        accounts={accounts}
-      />
-
-      <div className="flex-1 flex relative">
-        <Sidebar
-          activeTab={activeTab}
-          onSelectTab={(id) => { setActiveTab(id); setMobileMenuOpen(false); }}
-          mobileMenuOpen={mobileMenuOpen}
-          apiToken={apiToken}
-          onApiTokenChange={setApiToken}
-          onSaveToken={saveToken}
-          tokenStatus={tokenStatus}
+    <AppShell
+      activeTab={activeTab}
+      onSelectTab={selectTab}
+      apiToken={apiToken}
+      onApiTokenChange={setApiToken}
+      onSaveToken={saveToken}
+      tokenStatus={tokenStatus}
+      workerStatus={workerStatus}
+    >
+      {/* Screens stay mounted so switching tabs never discards in-progress
+          work - a typed URL list or a live results feed survives navigation.
+          Visibility is toggled with CSS rather than conditional rendering. */}
+      <Pane active={activeTab === 'dashboard'}>
+        <Dashboard
+          apiFetch={apiFetch}
+          workerStatus={workerStatus}
+          onRefreshWorker={loadWorkerStatus}
+          onNavigate={selectTab}
         />
+      </Pane>
 
-        <div className="flex-1 flex flex-col min-w-0">
-          {/* All screens stay mounted (matching the original single-component
-              app's behavior) so switching tabs never discards in-progress
-              work like typed URLs or a live results feed. Visibility is
-              toggled with CSS instead of conditional rendering. */}
-          <main className="flex-1 p-4 md:p-8 overflow-y-auto">
-            <div className={activeTab === 'dashboard' ? 'fadein' : 'hidden'}>
-              <Generator apiFetch={apiFetch} accounts={accounts} onNavigateToAccounts={() => setActiveTab('accounts')} />
-            </div>
-            <div className={activeTab === 'autopublish' ? 'fadein' : 'hidden'}>
-              <AutoPublisher apiFetch={apiFetch} accounts={accounts} active={activeTab === 'autopublish'} />
-            </div>
-            <div className={activeTab === 'stats' ? 'fadein' : 'hidden'}>
-              <PagesDashboard apiFetch={apiFetch} />
-            </div>
-            <div className={activeTab === 'templates' ? 'fadein' : 'hidden'}>
-              <TemplatesManager apiFetch={apiFetch} templates={templates} onTemplatesChanged={loadTemplates} />
-            </div>
-            <div className={activeTab === 'accounts' ? 'fadein' : 'hidden'}>
-              <AccountsManager apiFetch={apiFetch} accounts={accounts} templates={templates} onAccountsChanged={loadAccounts} />
-            </div>
-          </main>
-        </div>
-      </div>
-    </div>
+      <Pane active={activeTab === 'publisher'}>
+        <Generator apiFetch={apiFetch} accounts={accounts} onNavigateToAccounts={() => selectTab('accounts')} />
+      </Pane>
+
+      <Pane active={activeTab === 'channels'}>
+        <Channels apiFetch={apiFetch} onNavigate={selectTab} />
+      </Pane>
+
+      <Pane active={activeTab === 'analytics'}>
+        <Analytics apiFetch={apiFetch} />
+      </Pane>
+
+      <Pane active={activeTab === 'queue'}>
+        <ContentQueue apiFetch={apiFetch} accounts={accounts} />
+      </Pane>
+
+      <Pane active={activeTab === 'scheduler'}>
+        <AutoPublisher apiFetch={apiFetch} accounts={accounts} active={activeTab === 'scheduler'} />
+      </Pane>
+
+      <Pane active={activeTab === 'activity'}>
+        <ActivityLog apiFetch={apiFetch} accounts={accounts} />
+      </Pane>
+
+      <Pane active={activeTab === 'templates'}>
+        <TemplatesManager apiFetch={apiFetch} templates={templates} onTemplatesChanged={loadTemplates} />
+      </Pane>
+
+      <Pane active={activeTab === 'accounts'}>
+        <AccountsManager apiFetch={apiFetch} accounts={accounts} templates={templates} onAccountsChanged={loadAccounts} />
+      </Pane>
+
+      <Pane active={activeTab === 'settings'}>
+        <Settings apiFetch={apiFetch} accounts={accounts} />
+      </Pane>
+    </AppShell>
   );
+}
+
+function Pane({ active, children }) {
+  return <div className={active ? 'fadein' : 'hidden'}>{children}</div>;
 }

@@ -52,6 +52,7 @@ func newServer(engine Generator, templatesDir string, token string) http.Handler
 	mux.HandleFunc("/analytics/summary", srv.handleAnalyticsSummary)
 	mux.HandleFunc("/analytics/channels", srv.handleAnalyticsChannels)
 	mux.HandleFunc("/worker/status", srv.handleWorkerStatus)
+	mux.HandleFunc("/settings", srv.handleSettings)
 	mux.Handle("/", http.FileServer(http.FS(postgenWeb.FS)))
 
 	// Protect all routes except /health and static frontend files with Bearer token auth.

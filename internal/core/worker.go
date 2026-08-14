@@ -128,6 +128,11 @@ func (w *Worker) Stop() {
 	w.wg.Wait()
 }
 
+// defaultWorkerCooldownSeconds mirrors the cooldown cmd/api passes to
+// NewWorker, so the Settings screen can report the effective value without the
+// number being duplicated as a literal in two places.
+const defaultWorkerCooldownSeconds = 900
+
 // staleJobItemTimeout bounds how long an item may sit in 'publishing' before
 // the worker assumes it was orphaned by a crash/restart and marks it 'failed'
 // rather than leaving it stuck forever while its job is reported 'completed'.

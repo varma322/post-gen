@@ -115,6 +115,14 @@ func (s stubGenerator) ChannelAnalytics(ctx context.Context, days int) ([]models
 	return nil, nil
 }
 
+func (s stubGenerator) Settings(ctx context.Context) (*models.SettingsView, error) {
+	return &models.SettingsView{Sources: map[string]string{}}, nil
+}
+
+func (s stubGenerator) SaveSettings(ctx context.Context, update models.SettingsUpdate) error {
+	return nil
+}
+
 func (s stubGenerator) WorkerStatus() models.WorkerStatus {
 	return models.WorkerStatus{Running: true, Phase: "idle"}
 }

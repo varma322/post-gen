@@ -34,6 +34,8 @@ type Generator interface {
 	AnalyticsSummary(ctx context.Context, days int) (*models.AnalyticsSummary, error)
 	ChannelAnalytics(ctx context.Context, days int) ([]models.ChannelStats, error)
 	WorkerStatus() models.WorkerStatus
+	Settings(ctx context.Context) (*models.SettingsView, error)
+	SaveSettings(ctx context.Context, update models.SettingsUpdate) error
 }
 
 type generateRequest struct {

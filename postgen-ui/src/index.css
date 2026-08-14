@@ -1,4 +1,14 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Public+Sans:wght@400;500;600&display=swap');
+/* Inter for reading, Geist for technical metadata and numeric data, Material
+   Symbols for iconography - the three faces the PostGen V2 design system calls
+   for.
+
+   These load from the Google Fonts CDN, which is how this app has always
+   loaded fonts. It means the UI needs network for its typography: with the CDN
+   unreachable, Material Symbols degrade to their literal ligature text
+   ("dashboard", "hub") rather than glyphs. Vendoring the woff2 files into
+   public/fonts and embedding them via web/embed.go would remove that
+   dependency if offline operation is ever wanted. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Geist:wght@400;500;600;700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap');
 
 @tailwind base;
@@ -6,10 +16,17 @@
 @tailwind utilities;
 
 body {
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', system-ui, sans-serif;
     min-height: max(884px, 100dvh);
+    background-color: #131315;
+    color: #e5e1e4;
 }
-.label-font { font-family: 'Public Sans', sans-serif; }
+
+.label-font { font-family: 'Geist', 'Inter', sans-serif; }
+
+/* Numeric columns line up only with tabular figures - without this, counts in
+   a table jitter as digits change width. */
+.tabular { font-variant-numeric: tabular-nums; }
 
 @keyframes fadein {
   from { opacity: 0; transform: translateY(4px); }
@@ -19,3 +36,22 @@ body {
   animation: fadein 0.35s ease both;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .fadein { animation: none; }
+  * { transition-duration: 0.01ms !important; }
+}
+
+/* Keyboard focus must stay visible everywhere; several controls in this app
+   are icon-only and impossible to locate without it. */
+:focus-visible {
+  outline: 2px solid #c0c1ff;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Scrollbars, themed to the surface scale so they don't punch a bright hole
+   in a dark panel. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #1c1b1d; }
+::-webkit-scrollbar-thumb { background: #353437; border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: #464554; }

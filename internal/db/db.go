@@ -222,6 +222,16 @@ func (p *Pool) migrate(ctx context.Context) error {
 	-- facebook_post_id produces a dead URL for pages on the New Pages
 	-- Experience, whose permalinks use a different actor id than the page id.
 	ALTER TABLE published_posts ADD COLUMN IF NOT EXISTS permalink TEXT;
+
+	-- Runtime configuration editable from the Settings screen. Values here
+	-- override the equivalent environment variable; anything absent falls back
+	-- to the environment and then to a built-in default, so an install that
+	-- never touches this table behaves exactly as it did before.
+	CREATE TABLE IF NOT EXISTS settings (
+		key                  VARCHAR(64) PRIMARY KEY,
+		value                JSONB NOT NULL,
+		updated_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
 	`
 	_, err := p.pool.Exec(ctx, schema)
 	return err
