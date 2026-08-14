@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"post-gen/internal/ai"
 	"post-gen/internal/config"
 	"post-gen/internal/db"
@@ -14,7 +15,6 @@ import (
 	"post-gen/internal/publisher"
 	"post-gen/internal/scraper"
 	"post-gen/internal/utils"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -248,7 +248,7 @@ func (e *Engine) GeneratePostsWithPublish(ctx context.Context, urls []string, ac
 		// product shares it, so the whole fan-out is retrievable as a unit.
 		traceID := events.NewTraceID()
 
-		product, err := e.scrapeWithEvents(ctx, traceID, "", url)
+		product, err := e.scrapeWithEvents(ctx, traceID, "", "", url)
 		if err != nil {
 			results = append(results, Result{
 				URL:   url,
@@ -336,6 +336,12 @@ func (e *Engine) GeneratePostsWithPublish(ctx context.Context, urls []string, ac
 				}
 
 				if targetAccount.FacebookPageID != "" && targetAccount.FacebookAccessToken != "" {
+					if quotaErr := e.checkDailyQuota(ctx, targetAccount); quotaErr != nil {
+						result.PublishError = quotaErr.Error()
+						results = append(results, result)
+						continue
+					}
+
 					if publishAttempts > 0 && delayBetweenPosts > 0 {
 						if onCooldown != nil {
 							onCooldown(delayBetweenPosts)
@@ -378,7 +384,11 @@ func (e *Engine) PublishPost(accountName, postText string) (string, error) {
 	if account.FacebookPageID == "" || account.FacebookAccessToken == "" {
 		return "", fmt.Errorf("facebook credentials not configured for account %q", accountName)
 	}
-	
+
+	if err := e.checkDailyQuota(context.Background(), account); err != nil {
+		return "", err
+	}
+
 	// The caller hands us finished text and nothing else, so the product URL
 	// and title have to be recovered from the body. Best-effort by design:
 	// this only feeds the posted-state derivation and the dashboard's title
@@ -455,7 +465,13 @@ func (e *Engine) resolveAccounts(accountNames []string) ([]models.Account, error
 //
 // accountName may be empty for scrapes that aren't on behalf of one account,
 // such as adding a product to the shared queue.
-func (e *Engine) scrapeWithEvents(ctx context.Context, traceID, accountName, url string) (*models.Product, error) {
+//
+// partnerTag attributes the Creators API call to the Associates tracking ID
+// that will publish the result. Empty means "no specific account", in which
+// case the scraper falls back to its configured default.
+func (e *Engine) scrapeWithEvents(ctx context.Context, traceID, accountName, partnerTag, url string) (*models.Product, error) {
+	ctx = scraper.WithPartnerTag(ctx, partnerTag)
+
 	e.events.Emit(events.Event{
 		Type:       events.ScrapeStarted,
 		Source:     events.SourceAmazon,
@@ -676,7 +692,7 @@ func (e *Engine) AddQueuedProduct(ctx context.Context, url string) error {
 
 	traceID := events.NewTraceID()
 
-	product, err := e.scrapeWithEvents(ctx, traceID, "", urlNormalized)
+	product, err := e.scrapeWithEvents(ctx, traceID, "", "", urlNormalized)
 	if err != nil {
 		return fmt.Errorf("scraping product: %w", err)
 	}
@@ -974,6 +990,47 @@ func (e *Engine) accountBatchSize(ctx context.Context, acc models.Account) int {
 		return 0
 	}
 	return remaining
+}
+
+// QuotaExceededError reports that an account has already published its full
+// daily allowance.
+type QuotaExceededError struct {
+	Account   string
+	Posted    int
+	MaxPerDay int
+}
+
+func (e QuotaExceededError) Error() string {
+	return fmt.Sprintf("account %q has published %d of %d posts allowed today",
+		e.Account, e.Posted, e.MaxPerDay)
+}
+
+// checkDailyQuota enforces MaxPostsPerDay on the interactive publish paths.
+//
+// Only the daily cap is applied here, not active hours or the minimum delay.
+// Those two exist to pace unattended automation; someone deliberately pressing
+// publish at midnight has made a decision, and blocking it would be an
+// obstruction rather than a safeguard. The daily cap is different - it is the
+// ceiling the account is configured to respect, and exceeding it silently is
+// how an estate drifts past the cadence its operator believes it is keeping.
+//
+// A transient counting error fails open, matching checkAccountEligibility:
+// losing the database is not a reason to refuse a manual publish.
+func (e *Engine) checkDailyQuota(ctx context.Context, acc models.Account) error {
+	if e.db == nil || acc.MaxPostsPerDay <= 0 {
+		return nil
+	}
+
+	todayCount, err := e.db.CountPostsTodayForAccount(ctx, acc.Name)
+	if err != nil {
+		log.Printf("[WARN] Could not check the daily quota for account %s: %v. Allowing the publish.", acc.Name, err)
+		return nil
+	}
+
+	if todayCount >= acc.MaxPostsPerDay {
+		return QuotaExceededError{Account: acc.Name, Posted: todayCount, MaxPerDay: acc.MaxPostsPerDay}
+	}
+	return nil
 }
 
 // checkAccountEligibility evaluates an account's per-account scheduling and

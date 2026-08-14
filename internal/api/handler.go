@@ -765,6 +765,14 @@ func (s server) handlePublish(w http.ResponseWriter, r *http.Request) {
 
 	pubID, err := s.engine.PublishPost(req.Account, req.Content)
 	if err != nil {
+		// Hitting the configured daily cap is a conflict with current state,
+		// not a server fault - the caller can act on it by waiting or raising
+		// the cap, so it must not be reported as a 500.
+		var quotaErr core.QuotaExceededError
+		if errors.As(err, &quotaErr) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

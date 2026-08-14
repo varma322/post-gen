@@ -337,7 +337,7 @@ func (w *Worker) processNextJobItem() {
 	w.setPhase(phaseScraping, acc.Name, nextItem.ProductURL, &job.ID)
 	defer w.setIdle()
 
-	product, err := w.engine.scrapeWithEvents(ctx, traceID, acc.Name, nextItem.ProductURL)
+	product, err := w.engine.scrapeWithEvents(ctx, traceID, acc.Name, acc.AffiliateTag, nextItem.ProductURL)
 	if err != nil {
 		errMsg := fmt.Sprintf("Scrape error: %v", err)
 		log.Printf("[WARN] Item %d failed: %s", nextItem.ID, errMsg)

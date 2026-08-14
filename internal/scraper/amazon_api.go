@@ -215,13 +215,38 @@ func NewAmazonCreatorAPIScraper(clientID, clientSecret, tokenURL, defaultPartner
 	}
 }
 
-// effectivePartnerTag returns the configured partner tag, or the hardcoded
-// default Indian Associates tag if none was configured.
-func (s *AmazonCreatorAPIScraper) effectivePartnerTag() string {
-	if s.defaultPartnerTag != "" {
-		return s.defaultPartnerTag
+// partnerTagContextKey carries the tag of the account a scrape is being
+// performed for, so each catalog lookup is attributed to the Associates
+// tracking ID that will actually publish the result.
+type partnerTagContextKey struct{}
+
+// WithPartnerTag returns a context carrying the partner tag to use for
+// Creators API calls made on behalf of a specific account.
+func WithPartnerTag(ctx context.Context, tag string) context.Context {
+	if strings.TrimSpace(tag) == "" {
+		return ctx
 	}
-	return "notyoffers-21"
+	return context.WithValue(ctx, partnerTagContextKey{}, strings.TrimSpace(tag))
+}
+
+// partnerTagFrom recovers the per-request tag, if one was supplied.
+func partnerTagFrom(ctx context.Context) string {
+	tag, _ := ctx.Value(partnerTagContextKey{}).(string)
+	return tag
+}
+
+// effectivePartnerTag resolves which Associates tag this call is made under:
+// the account being published for, falling back to the configured default.
+//
+// There is deliberately no hardcoded fallback. Attributing every account's
+// catalog lookups to one literal tag baked into the source is precisely the
+// kind of thing that makes traffic unattributable, and a wrong tag is worse
+// than no API call - the HTML scraper still works.
+func (s *AmazonCreatorAPIScraper) effectivePartnerTag(ctx context.Context) string {
+	if tag := partnerTagFrom(ctx); tag != "" {
+		return tag
+	}
+	return s.defaultPartnerTag
 }
 
 // Scrape implements the Scraper interface.
@@ -237,12 +262,20 @@ func (s *AmazonCreatorAPIScraper) ScrapeWithMeta(ctx context.Context, rawURL str
 	// breaker below) can be determined.
 	resolvedURL := utils.ResolveAmazonShortURL(rawURL)
 	marketplace := getMarketplace(resolvedURL)
-	partnerTag := s.effectivePartnerTag()
+	partnerTag := s.effectivePartnerTag(ctx)
 
 	// fellBack runs the HTML scraper and tags the result with why we're here.
 	fellBack := func(reason string) (*models.Product, ScrapeMeta, error) {
 		product, err := s.fallback.Scrape(ctx, rawURL)
 		return product, ScrapeMeta{Source: "html", FallbackReason: reason}, err
+	}
+
+	// With no tag to attribute the call to, don't make it. Borrowing another
+	// account's tag is what this change exists to stop, and the HTML scraper
+	// produces the same product data without any attribution at all.
+	if partnerTag == "" {
+		log.Printf("[WARN] Creators API: no partner tag for this scrape (set AMAZON_CREATOR_PARTNER_TAG or give the account an affiliate_tag). Using HTML scraping.")
+		return fellBack("no partner tag")
 	}
 
 	if creatorAPICircuitOpen(partnerTag, marketplace) {
@@ -285,7 +318,7 @@ func (s *AmazonCreatorAPIScraper) fetchFromAPI(ctx context.Context, asin, market
 		return nil, fmt.Errorf("auth token error: %w", err)
 	}
 
-	partnerTag := s.effectivePartnerTag()
+	partnerTag := s.effectivePartnerTag(ctx)
 
 	payloadMap := map[string]interface{}{
 		"itemIds":     []string{asin},
@@ -306,7 +339,7 @@ func (s *AmazonCreatorAPIScraper) fetchFromAPI(ctx context.Context, asin, market
 	}
 
 	apiURL := "https://creatorsapi.amazon/catalog/v1/getItems"
-	
+
 	var resp *http.Response
 	client := &http.Client{Timeout: 15 * time.Second}
 	maxRetries := 3

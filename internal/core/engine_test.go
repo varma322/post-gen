@@ -408,3 +408,39 @@ func TestQueueAndAutoPostRequiresDatabase(t *testing.T) {
 	}
 }
 
+
+func TestCheckDailyQuotaSkippedWithoutDatabase(t *testing.T) {
+	// JSON-fallback mode has no publish history to count, so the quota is not
+	// enforceable there and must not block a publish.
+	engine := Engine{db: nil}
+
+	acc := models.Account{Name: "afficart", MaxPostsPerDay: 1}
+	if err := engine.checkDailyQuota(context.Background(), acc); err != nil {
+		t.Fatalf("expected no error without a database, got %v", err)
+	}
+}
+
+func TestCheckDailyQuotaSkippedWhenUncapped(t *testing.T) {
+	// An account with no cap needs no count query at all, so this must return
+	// before touching the nil pool rather than panicking on it.
+	engine := Engine{db: nil}
+
+	acc := models.Account{Name: "afficart", MaxPostsPerDay: 0}
+	if err := engine.checkDailyQuota(context.Background(), acc); err != nil {
+		t.Fatalf("expected no error for an uncapped account, got %v", err)
+	}
+}
+
+func TestQuotaExceededErrorMessage(t *testing.T) {
+	// The message reaches the operator through the Publisher screen, so it has
+	// to say which account and by how much - "quota exceeded" alone is useless
+	// when fifteen channels are selected.
+	err := QuotaExceededError{Account: "Dealz Adda", Posted: 2, MaxPerDay: 1}
+
+	message := err.Error()
+	for _, want := range []string{"Dealz Adda", "2", "1"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("error message %q should mention %q", message, want)
+		}
+	}
+}
