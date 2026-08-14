@@ -15,11 +15,19 @@
 @tailwind components;
 @tailwind utilities;
 
+/* The shell is a fixed viewport frame that scrolls internally, so the page
+   itself must never scroll. A min-height floor here (it used to be 884px)
+   would push the body past the viewport on a short window and produce a
+   second scrollbar beside the content column's own. */
+html, body, #root {
+    height: 100%;
+}
+
 body {
     font-family: 'Inter', system-ui, sans-serif;
-    min-height: max(884px, 100dvh);
     background-color: #131315;
     color: #e5e1e4;
+    overflow: hidden;
 }
 
 .label-font { font-family: 'Geist', 'Inter', sans-serif; }

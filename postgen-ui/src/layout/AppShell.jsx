@@ -40,7 +40,11 @@ export default function AppShell({
   };
 
   return (
-    <div className="flex min-h-screen bg-background font-body text-on-surface antialiased">
+    // A fixed viewport frame rather than a page that grows: the shell is
+    // exactly one screen tall and never scrolls, so the sidebar and top bar
+    // stay put while only the content column moves. Without this the sidebar
+    // scrolls away on long screens like the activity log.
+    <div className="flex h-screen overflow-hidden bg-background font-body text-on-surface antialiased">
       {/* Mobile scrim */}
       {mobileOpen && (
         <div
@@ -51,7 +55,7 @@ export default function AppShell({
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex flex-col border-r border-outline-variant bg-surface-container-low transition-transform lg:static lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 flex h-screen shrink-0 flex-col border-r border-outline-variant bg-surface-container-low transition-transform lg:static lg:h-full lg:translate-x-0 ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
         style={{ width: collapsed ? 64 : 240 }}
@@ -129,8 +133,8 @@ export default function AppShell({
         </button>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex items-center gap-4 border-b border-outline-variant bg-surface-container-low px-4 py-3">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <header className="z-20 flex shrink-0 items-center gap-4 border-b border-outline-variant bg-surface-container-low px-4 py-3">
           <button
             onClick={() => setMobileOpen(true)}
             className="text-on-surface-variant hover:text-on-surface lg:hidden"
@@ -148,8 +152,13 @@ export default function AppShell({
           <WorkerBadge status={workerStatus} />
         </header>
 
-        <main className="mx-auto w-full max-w-container flex-1 overflow-y-auto p-4 md:p-6">
-          {children}
+        {/* min-h-0 is what actually lets this shrink and scroll. A flex child
+            defaults to min-height:auto, which refuses to shrink below its
+            content, pushing the overflow back onto the page. */}
+        <main className="min-h-0 flex-1 overflow-y-auto">
+          <div className="mx-auto w-full max-w-container p-4 md:p-6">
+            {children}
+          </div>
         </main>
       </div>
     </div>
