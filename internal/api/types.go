@@ -36,6 +36,11 @@ type Generator interface {
 	WorkerStatus() models.WorkerStatus
 	Settings(ctx context.Context) (*models.SettingsView, error)
 	SaveSettings(ctx context.Context, update models.SettingsUpdate) error
+	Schedules(ctx context.Context) ([]models.JobSchedule, error)
+	CreateSchedule(ctx context.Context, schedule models.JobSchedule) (*models.JobSchedule, error)
+	UpdateSchedule(ctx context.Context, schedule models.JobSchedule) (*models.JobSchedule, error)
+	DeleteSchedule(ctx context.Context, id int) error
+	RunSchedule(ctx context.Context, id int) (int, error)
 }
 
 type generateRequest struct {

@@ -171,6 +171,10 @@ func (w *Worker) run() {
 			log.Println("[INFO] Auto-Post background worker stopping.")
 			return
 		case <-ticker.C:
+			// Schedules are evaluated on the same tick as job draining, so
+			// recurring triggers need no goroutine or lock of their own. A
+			// schedule that fires creates a job the very next pass picks up.
+			w.engine.runDueSchedules(context.Background(), time.Now())
 			w.processNextJobItem()
 		}
 	}

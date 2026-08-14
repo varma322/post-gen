@@ -123,6 +123,26 @@ func (s stubGenerator) SaveSettings(ctx context.Context, update models.SettingsU
 	return nil
 }
 
+func (s stubGenerator) Schedules(ctx context.Context) ([]models.JobSchedule, error) {
+	return nil, nil
+}
+
+func (s stubGenerator) CreateSchedule(ctx context.Context, schedule models.JobSchedule) (*models.JobSchedule, error) {
+	return &schedule, nil
+}
+
+func (s stubGenerator) UpdateSchedule(ctx context.Context, schedule models.JobSchedule) (*models.JobSchedule, error) {
+	return &schedule, nil
+}
+
+func (s stubGenerator) DeleteSchedule(ctx context.Context, id int) error {
+	return nil
+}
+
+func (s stubGenerator) RunSchedule(ctx context.Context, id int) (int, error) {
+	return 1, nil
+}
+
 func (s stubGenerator) WorkerStatus() models.WorkerStatus {
 	return models.WorkerStatus{Running: true, Phase: "idle"}
 }

@@ -232,6 +232,40 @@ func (p *Pool) migrate(ctx context.Context) error {
 		value                JSONB NOT NULL,
 		updated_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);
+
+	-- Named recurring triggers for the auto-post pipeline.
+	--
+	-- Deliberately not cron: two shapes cover what this pipeline actually
+	-- needs - "every N minutes" and "daily at HH:MM" - and they can be
+	-- rendered and edited in a form without teaching anyone cron syntax or
+	-- pulling in an expression parser.
+	CREATE TABLE IF NOT EXISTS job_schedules (
+		id                   SERIAL PRIMARY KEY,
+		name                 VARCHAR(255) NOT NULL,
+		kind                 VARCHAR(16) NOT NULL,
+		interval_minutes     INT NOT NULL DEFAULT 0,
+		daily_at             TEXT NOT NULL DEFAULT '',
+		rotate_old_links     BOOLEAN NOT NULL DEFAULT FALSE,
+		enabled              BOOLEAN NOT NULL DEFAULT TRUE,
+		next_run_at          TIMESTAMP,
+		last_run_at          TIMESTAMP,
+		last_job_id          INT,
+		last_error           TEXT,
+		created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_job_schedules_due ON job_schedules(enabled, next_run_at);
+
+	DROP TRIGGER IF EXISTS update_job_schedules_updated_at ON job_schedules;
+	CREATE TRIGGER update_job_schedules_updated_at
+		BEFORE UPDATE ON job_schedules
+		FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+	-- Jobs gain a name so a run is identifiable in the scheduler, and record
+	-- which schedule produced them.
+	ALTER TABLE publication_jobs ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';
+	ALTER TABLE publication_jobs ADD COLUMN IF NOT EXISTS schedule_id INT;
 	`
 	_, err := p.pool.Exec(ctx, schema)
 	return err

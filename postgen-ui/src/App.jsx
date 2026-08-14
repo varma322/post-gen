@@ -8,7 +8,7 @@ import Analytics from './screens/Analytics';
 import Channels from './screens/Channels';
 import ContentQueue from './screens/ContentQueue';
 import Publisher from './screens/Publisher';
-import AutoPublisher from './screens/AutoPublisher';
+import Scheduler from './screens/Scheduler';
 import TemplatesManager from './screens/TemplatesManager';
 import AccountsManager from './screens/AccountsManager';
 import Settings from './screens/Settings';
@@ -159,7 +159,7 @@ export default function App() {
       </Pane>
 
       <Pane active={activeTab === 'scheduler'}>
-        <AutoPublisher apiFetch={apiFetch} accounts={accounts} active={activeTab === 'scheduler'} />
+        <Scheduler apiFetch={apiFetch} active={activeTab === 'scheduler'} />
       </Pane>
 
       <Pane active={activeTab === 'activity'}>
