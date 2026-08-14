@@ -56,6 +56,7 @@ function SharedQueue({ apiFetch }) {
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
+  const [activeJob, setActiveJob] = useState(null);
   const [newUrl, setNewUrl] = useState('');
   const [adding, setAdding] = useState(false);
 
@@ -63,13 +64,18 @@ function SharedQueue({ apiFetch }) {
     setLoading(true);
     setError('');
     try {
-      const [productsResp, summaryResp] = await Promise.all([
+      const [productsResp, summaryResp, jobResp] = await Promise.all([
         apiFetch('/products'),
         apiFetch('/analytics/summary?days=7'),
+        apiFetch('/jobs/active'),
       ]);
       if (!productsResp.ok) throw new Error('Failed to load the queue');
       setProducts((await productsResp.json()).products || []);
       if (summaryResp.ok) setSummary(await summaryResp.json());
+      if (jobResp.ok) {
+        const data = await jobResp.json();
+        setActiveJob(data.active ? data.job : null);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -133,18 +139,39 @@ function SharedQueue({ apiFetch }) {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <KpiCard label="Total Items" value={products.length} icon="view_list" />
-        <KpiCard label="Pending" value={summary?.queue_health.pending ?? 0} icon="schedule" />
-        <KpiCard label="Publishing" value={summary?.queue_health.publishing ?? 0} icon="sync" />
-        <KpiCard label="Published (24h)" value={summary?.queue_health.published_24h ?? 0} icon="check_circle" />
-        <KpiCard
-          label="Failed"
-          value={summary?.queue_health.failed ?? 0}
-          icon="error"
-          tone={(summary?.queue_health.failed ?? 0) > 0 ? 'error' : 'default'}
-        />
+      {/* These are two different populations and must not read as one row.
+          "Products waiting" counts this screen's own table; the pipeline
+          counts are job items, which come from the pools as well as here.
+          Shown side by side unlabelled, an empty queue next to seven pending
+          items looks like the screen is broken. */}
+      <div className="grid gap-4 lg:grid-cols-5">
+        <div className="lg:col-span-1">
+          <SectionLabel>In this queue</SectionLabel>
+          <KpiCard label="Products waiting" value={products.length} icon="view_list" />
+        </div>
+
+        <div className="lg:col-span-4">
+          <SectionLabel>
+            Publishing pipeline
+            <span className="ml-1 font-normal normal-case text-on-surface-variant">
+              — job items across all channels, drawn from pools and this queue
+            </span>
+          </SectionLabel>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <KpiCard label="Pending" value={summary?.queue_health.pending ?? 0} icon="schedule" />
+            <KpiCard label="Publishing" value={summary?.queue_health.publishing ?? 0} icon="sync" />
+            <KpiCard label="Published (24h)" value={summary?.queue_health.published_24h ?? 0} icon="check_circle" />
+            <KpiCard
+              label="Failed (all time)"
+              value={summary?.queue_health.failed ?? 0}
+              icon="error"
+              tone={(summary?.queue_health.failed ?? 0) > 0 ? 'error' : 'default'}
+            />
+          </div>
+        </div>
       </div>
+
+      {activeJob && <ActiveJobStrip job={activeJob} />}
 
       {error && <ErrorNotice message={error} onRetry={load} />}
 
@@ -437,6 +464,44 @@ function ChannelPools({ apiFetch, accounts }) {
           </div>
         )}
       </Card>
+    </div>
+  );
+}
+
+/**
+ * ActiveJobStrip explains where the pending items live. Without it, a run in
+ * flight is invisible here and the pipeline figures look unattached to
+ * anything on the screen.
+ */
+function ActiveJobStrip({ job }) {
+  const items = job.items || [];
+  const pending = items.filter((i) => i.status === 'pending').length;
+  const published = items.filter((i) => i.status === 'published').length;
+  const failed = items.filter((i) => i.status === 'failed').length;
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md border border-primary/40 bg-primary/10 px-4 py-3">
+      <span className="flex items-center gap-2">
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-secondary" />
+        <span className="text-body-md text-on-surface">
+          {job.name ? `${job.name} (job #${job.id})` : `Job #${job.id}`} is running
+        </span>
+      </span>
+      <span className="text-body-sm text-on-surface-variant tabular">
+        {published} published · {failed} failed · {pending} still pending
+      </span>
+      <span className="text-label-sm text-on-surface-variant">
+        These are the pending items above — they come from channel pools, not this queue.
+      </span>
+    </div>
+  );
+}
+
+/** SectionLabel names a group of figures so each number is attributable. */
+function SectionLabel({ children }) {
+  return (
+    <div className="mb-2 text-label-sm font-medium uppercase tracking-wide text-on-surface-variant">
+      {children}
     </div>
   );
 }
