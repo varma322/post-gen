@@ -29,6 +29,11 @@ type Generator interface {
 	GetActiveJob(ctx context.Context) (*models.PublicationJob, error)
 	CancelActiveJobs(ctx context.Context) error
 	Events() *events.Logger
+	QueryEvents(ctx context.Context, filter models.EventFilter) ([]models.Event, error)
+	EventsByTrace(ctx context.Context, traceID string) ([]models.Event, error)
+	AnalyticsSummary(ctx context.Context, days int) (*models.AnalyticsSummary, error)
+	ChannelAnalytics(ctx context.Context, days int) ([]models.ChannelStats, error)
+	WorkerStatus() models.WorkerStatus
 }
 
 type generateRequest struct {

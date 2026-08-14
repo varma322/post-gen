@@ -23,6 +23,8 @@ type stubGenerator struct {
 	err          error
 	accounts     []models.Account
 	generateFunc func(urls []string, accountNames []string) ([]core.Result, error)
+	storedEvents []models.Event
+	eventsErr    error
 }
 
 func (s stubGenerator) GeneratePosts(ctx context.Context, urls []string, accountNames []string) ([]core.Result, error) {
@@ -95,6 +97,26 @@ func (s stubGenerator) TriggerAutoPostJob(ctx context.Context, rotateOldLinks bo
 // Close all handle a nil receiver, so handlers need no guard around it.
 func (s stubGenerator) Events() *events.Logger {
 	return nil
+}
+
+func (s stubGenerator) QueryEvents(ctx context.Context, filter models.EventFilter) ([]models.Event, error) {
+	return s.storedEvents, s.eventsErr
+}
+
+func (s stubGenerator) EventsByTrace(ctx context.Context, traceID string) ([]models.Event, error) {
+	return s.storedEvents, s.eventsErr
+}
+
+func (s stubGenerator) AnalyticsSummary(ctx context.Context, days int) (*models.AnalyticsSummary, error) {
+	return &models.AnalyticsSummary{Days: days}, nil
+}
+
+func (s stubGenerator) ChannelAnalytics(ctx context.Context, days int) ([]models.ChannelStats, error) {
+	return nil, nil
+}
+
+func (s stubGenerator) WorkerStatus() models.WorkerStatus {
+	return models.WorkerStatus{Running: true, Phase: "idle"}
 }
 
 func (s stubGenerator) GetActiveJob(ctx context.Context) (*models.PublicationJob, error) {

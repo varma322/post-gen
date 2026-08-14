@@ -46,6 +46,23 @@ type Engine struct {
 	aiEnricher     *ai.Enricher
 	db             *db.Pool
 	events         *events.Logger
+	// worker is set by NewWorker when one is started. It stays nil for the
+	// CLI and bot, which have no background publisher.
+	worker *Worker
+}
+
+// WorkerStatus reports what the background worker is doing. When no worker is
+// running - the CLI and bot never start one - it reports a stopped worker
+// rather than an error, so the dashboard renders an honest idle panel.
+func (e *Engine) WorkerStatus() models.WorkerStatus {
+	e.mu.RLock()
+	worker := e.worker
+	e.mu.RUnlock()
+
+	if worker == nil {
+		return models.WorkerStatus{Phase: phaseIdle}
+	}
+	return worker.Status()
 }
 
 // Events exposes the pipeline event logger so the API layer can report the

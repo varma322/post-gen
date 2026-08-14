@@ -21,15 +21,99 @@ type Worker struct {
 	cooldown     time.Duration
 	isProcessing bool
 	mu           sync.Mutex
+
+	// statusMu guards the live status snapshot, which the HTTP layer reads
+	// concurrently with the worker goroutine writing it.
+	statusMu sync.RWMutex
+	status   models.WorkerStatus
 }
 
-// NewWorker creates a new background worker.
+// Status returns a snapshot of what the worker is doing, for the dashboard's
+// Worker Status panel.
+func (w *Worker) Status() models.WorkerStatus {
+	w.statusMu.RLock()
+	defer w.statusMu.RUnlock()
+
+	snapshot := w.status
+	snapshot.CooldownSecs = int(w.cooldown.Seconds())
+
+	// A cooldown that has already elapsed is stale - report idle rather than a
+	// countdown the UI would render as a negative number.
+	if snapshot.CooldownUntil != nil && time.Now().After(*snapshot.CooldownUntil) {
+		snapshot.CooldownUntil = nil
+		if snapshot.Phase == phaseCooldown {
+			snapshot.Phase = phaseIdle
+		}
+	}
+
+	return snapshot
+}
+
+// Worker phases, as reported by Status.
+const (
+	phaseIdle       = "idle"
+	phaseScraping   = "scraping"
+	phaseEnriching  = "enriching"
+	phasePublishing = "publishing"
+	phaseCooldown   = "cooldown"
+)
+
+// setPhase records what the worker is currently doing.
+func (w *Worker) setPhase(phase, account, url string, jobID *int) {
+	w.statusMu.Lock()
+	defer w.statusMu.Unlock()
+
+	w.status.Phase = phase
+	w.status.CurrentAccount = account
+	w.status.CurrentURL = url
+	w.status.CurrentJobID = jobID
+}
+
+// setIdle clears the current item, keeping the running flag and history.
+func (w *Worker) setIdle() {
+	w.statusMu.Lock()
+	defer w.statusMu.Unlock()
+
+	w.status.Phase = phaseIdle
+	w.status.CurrentAccount = ""
+	w.status.CurrentURL = ""
+	w.status.CurrentJobID = nil
+}
+
+// notePublished records a successful publish and the cooldown it starts.
+func (w *Worker) notePublished(at time.Time) {
+	w.statusMu.Lock()
+	defer w.statusMu.Unlock()
+
+	until := at.Add(w.cooldown)
+	w.status.LastPublishAt = &at
+	w.status.CooldownUntil = &until
+	w.status.Phase = phaseCooldown
+	w.status.LastError = ""
+}
+
+// noteError records the most recent failure so the panel can surface it.
+func (w *Worker) noteError(message string) {
+	w.statusMu.Lock()
+	defer w.statusMu.Unlock()
+	w.status.LastError = message
+}
+
+// NewWorker creates a new background worker and registers it with the engine,
+// so the HTTP layer can report worker state without being handed the worker
+// separately at every construction site.
 func NewWorker(engine *Engine, defaultCooldown time.Duration) *Worker {
-	return &Worker{
+	worker := &Worker{
 		engine:   engine,
 		stopChan: make(chan struct{}),
 		cooldown: defaultCooldown,
 	}
+
+	engine.mu.Lock()
+	engine.worker = worker
+	engine.mu.Unlock()
+
+	return worker
 }
 
 // Start spawns the background worker run loop.
@@ -55,6 +139,18 @@ func (w *Worker) run() {
 	defer ticker.Stop()
 
 	log.Println("[INFO] Auto-Post background worker started.")
+
+	w.statusMu.Lock()
+	w.status.Running = true
+	w.status.Phase = phaseIdle
+	w.statusMu.Unlock()
+
+	defer func() {
+		w.statusMu.Lock()
+		w.status.Running = false
+		w.status.Phase = phaseIdle
+		w.statusMu.Unlock()
+	}()
 
 	if w.engine.db != nil {
 		if n, err := w.engine.db.RecoverStaleJobItems(context.Background(), staleJobItemTimeout); err != nil {
@@ -229,11 +325,15 @@ func (w *Worker) processNextJobItem() {
 		return
 	}
 
+	w.setPhase(phaseScraping, acc.Name, nextItem.ProductURL, &job.ID)
+	defer w.setIdle()
+
 	product, err := w.engine.scrapeWithEvents(ctx, traceID, acc.Name, nextItem.ProductURL)
 	if err != nil {
 		errMsg := fmt.Sprintf("Scrape error: %v", err)
 		log.Printf("[WARN] Item %d failed: %s", nextItem.ID, errMsg)
 		_ = w.engine.db.UpdateJobItemStatus(ctx, nextItem.ID, "failed", errMsg, nil)
+		w.noteError(errMsg)
 		return
 	}
 
@@ -264,6 +364,7 @@ func (w *Worker) processNextJobItem() {
 	productForAccount.Link = affiliateLink
 
 	if acc.UseAI {
+		w.setPhase(phaseEnriching, acc.Name, nextItem.ProductURL, &job.ID)
 		enrichCtx, cancel := context.WithTimeout(ai.WithTrace(ctx, traceID), enrichTimeout)
 		productForAccount = w.engine.aiEnricher.Enrich(enrichCtx, productForAccount, acc)
 		cancel()
@@ -293,6 +394,8 @@ func (w *Worker) processNextJobItem() {
 		return
 	}
 
+	w.setPhase(phasePublishing, acc.Name, nextItem.ProductURL, &job.ID)
+
 	published, pubErr := w.engine.publishWithEvents(ctx, traceID, acc, models.PublishedPost{
 		ProductTitle: productForAccount.Title,
 		ProductURL:   nextItem.ProductURL,
@@ -302,10 +405,12 @@ func (w *Worker) processNextJobItem() {
 		errMsg := fmt.Sprintf("Facebook publish error: %v", pubErr)
 		log.Printf("[ERR] Item %d Facebook API error: %s", nextItem.ID, errMsg)
 		_ = w.engine.db.UpdateJobItemStatus(ctx, nextItem.ID, "failed", errMsg, nil)
+		w.noteError(errMsg)
 		return
 	}
 
 	publishedAt := time.Now()
+	w.notePublished(publishedAt)
 	if err := w.engine.db.UpdateJobItemStatus(ctx, nextItem.ID, "published", "", &publishedAt); err != nil {
 		log.Printf("[ERR] Failed to update job item to published: %v", err)
 	}
