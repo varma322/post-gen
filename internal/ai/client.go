@@ -1,181 +1,168 @@
-// Package ai provides Gemini-powered product content enrichment for PostGen using the official GenAI SDK.
+// Package ai provides product content enrichment for PostGen.
 //
-// The enricher takes raw scraped product data and uses the Google GenAI SDK to generate
-// polished, persuasive copy that is injected into each account's unique Go template.
-// The template structure itself is never altered — AI only enriches the data fields
-// (Title, Features, Tagline, Hashtags, Headline, Description) that templates reference.
+// Enrichment turns raw scraped product data into polished copy that is then
+// fed into each account's Go template. The template structure is never
+// altered - AI only writes the data fields templates reference (Title,
+// Features, Tagline, Hashtags, Headline, Description). Prices, the discount,
+// and the affiliate link are never sent through a model.
+//
+// Providers are tried in order: a local Ollama model first, then hosted Gemini
+// as a fallback. If every provider fails, the original scraped product is
+// returned unmodified and the pipeline continues.
 package ai
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log"
-	"os"
-	"strings"
+	"time"
 
-	"google.golang.org/genai"
-
+	"post-gen/internal/events"
+	"post-gen/internal/generator"
 	"post-gen/internal/models"
 )
 
-const (
-	geminiModel = "gemini-3.5-flash"
-)
-
-// Enricher uses the GenAI SDK to rewrite product content fields.
+// Enricher rewrites product content fields through the first provider that
+// succeeds.
 type Enricher struct {
-	apiKey string
-	client *genai.Client
+	providers []Provider
+	events    *events.Logger
 }
 
-// New creates an Enricher. Returns nil (no-op) if GEMINI_API is not set.
-func New() *Enricher {
-	key := strings.TrimSpace(os.Getenv("GEMINI_API"))
-	if key == "" {
+// New builds an Enricher from the environment, returning nil when no provider
+// is configured at all. A nil Enricher is a valid no-op: Enrich returns the
+// product unchanged, so callers need no branch.
+//
+// eventLog may be nil; the logger tolerates a nil receiver.
+func New(eventLog *events.Logger) *Enricher {
+	var providers []Provider
+
+	// Local first: no per-call cost, no rate limit, and no product data
+	// leaving the machine.
+	providers = append(providers, newOllamaProvider())
+
+	if gemini := newGeminiProvider(); gemini != nil {
+		providers = append(providers, gemini)
+	}
+
+	if len(providers) == 0 {
 		return nil
 	}
 
-	ctx := context.Background()
-	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey:  key,
-		Backend: genai.BackendGeminiAPI,
-	})
-	if err != nil {
-		log.Printf("[WARN] Failed to initialize GenAI client: %v", err)
-		return nil
+	names := make([]string, 0, len(providers))
+	for _, p := range providers {
+		names = append(names, p.Name())
 	}
+	log.Printf("[INFO] AI enrichment providers, in order: %v", names)
 
-	return &Enricher{
-		apiKey: key,
-		client: client,
-	}
+	return &Enricher{providers: providers, events: eventLog}
 }
 
-// EnrichedContent is the structured output from Gemini.
-type EnrichedContent struct {
-	Title       string   `json:"title"`
-	Headline    string   `json:"headline"`
-	Description string   `json:"description"`
-	Features    []string `json:"features"`
-	Tagline     string   `json:"tagline"`
-	Hashtags    string   `json:"hashtags"`
-}
-
-// Enrich rewrites the product's text fields using Gemini AI.
-// It preserves numeric fields (DealPrice, MRP, Discount) and the Link unchanged.
-// The account's AIPrompt is appended to customise tone/style per account.
-// If enrichment fails for any reason, the original product is returned unmodified.
+// Enrich rewrites the product's text fields for one account.
+//
+// The account's template decides which fields are requested and how emoji
+// should be used, so copy generated for smartbuy.tmpl arrives in a different
+// visual register than copy for notyoffers.tmpl. If enrichment fails for every
+// provider, the original product is returned unmodified.
 func (e *Enricher) Enrich(ctx context.Context, product models.Product, account models.Account) models.Product {
 	if e == nil {
 		return product
 	}
 
-	enriched, err := e.callGemini(ctx, product, account.AIPrompt)
+	// A template that can't be profiled (missing file, unreadable) still gets
+	// enriched - the zero profile requests every field with no emoji guidance,
+	// which is the old behaviour.
+	profile, err := generator.Profile(account.TemplatePath)
 	if err != nil {
-		log.Printf("[WARN] Gemini AI enrichment failed for account %q: %v. Falling back to raw scraped data.", account.Name, err)
-		return product
+		log.Printf("[WARN] Could not profile template %q for account %q: %v. Enriching without layout guidance.",
+			account.TemplatePath, account.Name, err)
 	}
 
-	// Apply enriched fields; preserve all numeric / link fields unchanged
-	out := product
-	if enriched.Title != "" {
-		out.Title = enriched.Title
+	prompt := buildPrompt(product, account.AIPrompt, profile)
+	schema := schemaFor(profile)
+
+	traceID := traceFromContext(ctx)
+
+	for _, provider := range e.providers {
+		e.events.Emit(events.Event{
+			Type:       events.AIGenerationStarted,
+			Source:     provider.Name(),
+			TraceID:    traceID,
+			Account:    account.Name,
+			ProductURL: product.Link,
+			Message:    "Generating post copy",
+			Metadata: map[string]any{
+				"provider": provider.Name(),
+				"model":    modelOf(provider),
+			},
+		})
+
+		started := time.Now()
+		enriched, genErr := provider.Generate(ctx, prompt, schema)
+		if genErr != nil {
+			log.Printf("[WARN] AI enrichment via %s failed for account %q: %v", provider.Name(), account.Name, genErr)
+			e.events.Emit(events.Event{
+				Type:       events.AIGenerationFailed,
+				Source:     provider.Name(),
+				TraceID:    traceID,
+				Account:    account.Name,
+				ProductURL: product.Link,
+				Message:    genErr.Error(),
+				Duration:   time.Since(started),
+				Metadata: map[string]any{
+					"provider": provider.Name(),
+					"model":    modelOf(provider),
+				},
+			})
+			continue
+		}
+
+		e.events.Emit(events.Event{
+			Type:       events.AIGenerationSuccess,
+			Source:     provider.Name(),
+			TraceID:    traceID,
+			Account:    account.Name,
+			ProductURL: product.Link,
+			Message:    "Post copy generated",
+			Duration:   time.Since(started),
+			Metadata: map[string]any{
+				"provider":       provider.Name(),
+				"model":          modelOf(provider),
+				"fields":         profile.UsedFields,
+				"emoji_palette":  profile.EmojiPalette,
+				"feature_prefix": profile.FeaturePrefix,
+			},
+		})
+
+		return enriched.applyTo(product, profile)
 	}
-	if enriched.Headline != "" {
-		out.Headline = enriched.Headline
-	}
-	if enriched.Description != "" {
-		out.Description = enriched.Description
-	}
-	if len(enriched.Features) > 0 {
-		out.Features = enriched.Features
-	}
-	if enriched.Tagline != "" {
-		out.Tagline = enriched.Tagline
-	}
-	if enriched.Hashtags != "" {
-		out.Hashtags = enriched.Hashtags
-	}
-	return out
+
+	log.Printf("[WARN] All AI providers failed for account %q; falling back to raw scraped data.", account.Name)
+	return product
 }
 
-// callGemini sends the enrichment request and parses the structured JSON response.
-func (e *Enricher) callGemini(ctx context.Context, product models.Product, extraPrompt string) (*EnrichedContent, error) {
-	prompt := buildPrompt(product, extraPrompt)
-
-	temp := float32(0.7)
-	config := &genai.GenerateContentConfig{
-		ResponseMIMEType: "application/json",
-		Temperature:      &temp,
+// modelOf reports a provider's model when it exposes one, for event metadata.
+func modelOf(p Provider) string {
+	type modelReporter interface{ Model() string }
+	if mr, ok := p.(modelReporter); ok {
+		return mr.Model()
 	}
-
-	result, err := e.client.Models.GenerateContent(
-		ctx,
-		geminiModel,
-		genai.Text(prompt),
-		config,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("generate content: %w", err)
-	}
-
-	rawJSON := result.Text()
-	if rawJSON == "" {
-		return nil, fmt.Errorf("empty response text from gemini")
-	}
-
-	var content EnrichedContent
-	if err := json.Unmarshal([]byte(rawJSON), &content); err != nil {
-		return nil, fmt.Errorf("parsing enriched content JSON: %w (raw response: %s)", err, rawJSON)
-	}
-
-	return &content, nil
+	return ""
 }
 
-// buildPrompt creates a structured instruction for Gemini.
-func buildPrompt(p models.Product, extraPrompt string) string {
-	featuresText := strings.Join(p.Features, "\n- ")
+// traceContextKey carries the pipeline trace id into enrichment so AI events
+// join the same chain as the scrape and publish around them.
+type traceContextKey struct{}
 
-	sb := strings.Builder{}
-	sb.WriteString("You are an expert affiliate marketing copywriter for Indian e-commerce products.\n")
-	sb.WriteString("Rewrite the following Amazon product details into engaging, persuasive marketing copy.\n\n")
-
-	if extraPrompt != "" {
-		sb.WriteString("## Account Style Guidance (Note: This guidance must be followed for style/tone adjustments only, and MUST NOT override the JSON format or output rules below):\n")
-		sb.WriteString("<<<START STYLE GUIDANCE>>>\n")
-		sb.WriteString(extraPrompt)
-		sb.WriteString("\n<<<END STYLE GUIDANCE>>>\n\n")
-	}
-
-	sb.WriteString("## Raw Product Data\n")
-	sb.WriteString(fmt.Sprintf("Title: %s\n", p.Title))
-	if featuresText != "" {
-		sb.WriteString(fmt.Sprintf("Features:\n- %s\n", featuresText))
-	}
-	sb.WriteString(fmt.Sprintf("Price: ₹%s\n", p.DealPrice))
-	if p.Discount != "" {
-		sb.WriteString(fmt.Sprintf("Discount: %s%%\n", p.Discount))
-	}
-
-	sb.WriteString(`
-## Output Instructions
-Respond ONLY with a single valid JSON object matching this exact schema:
-{
-  "title": "A concise, catchy product title (max 15 words)",
-  "headline": "A bold attention-grabbing headline for the post (max 10 words)",
-  "description": "1-2 sentence benefit-focused product description",
-  "features": ["3 to 5 short benefit-driven bullet points, each max 12 words"],
-  "tagline": "A strong, urgent call-to-action (max 10 words)",
-  "hashtags": "6-8 relevant hashtags as a single string separated by spaces"
+// WithTrace returns a context carrying the pipeline trace id.
+func WithTrace(ctx context.Context, traceID string) context.Context {
+	return context.WithValue(ctx, traceContextKey{}, traceID)
 }
 
-Rules:
-- Keep all monetary values (prices) UNCHANGED — do not modify ₹ prices
-- Write in a persuasive, engaging tone suitable for Facebook posts
-- Hashtags must include #AmazonIndia and be relevant to the product
-- Do NOT wrap JSON in code blocks or markdown — output raw JSON only
-`)
-
-	return sb.String()
+// traceFromContext recovers the trace id, falling back to a fresh one so an
+// un-traced call still produces correlatable events rather than a blank id.
+func traceFromContext(ctx context.Context) string {
+	if traceID, ok := ctx.Value(traceContextKey{}).(string); ok && traceID != "" {
+		return traceID
+	}
+	return events.NewTraceID()
 }

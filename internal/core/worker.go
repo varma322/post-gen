@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"post-gen/internal/ai"
 	"post-gen/internal/events"
 	"post-gen/internal/models"
 	"post-gen/internal/utils"
@@ -263,7 +264,7 @@ func (w *Worker) processNextJobItem() {
 	productForAccount.Link = affiliateLink
 
 	if acc.UseAI {
-		enrichCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+		enrichCtx, cancel := context.WithTimeout(ai.WithTrace(ctx, traceID), enrichTimeout)
 		productForAccount = w.engine.aiEnricher.Enrich(enrichCtx, productForAccount, acc)
 		cancel()
 	}

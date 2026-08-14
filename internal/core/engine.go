@@ -23,6 +23,12 @@ import (
 const (
 	defaultTagline  = "Don't miss out on this amazing deal!"
 	defaultHashtags = "#AmazonDeals #Offers #MustHave"
+
+	// enrichTimeout bounds one account's AI enrichment. It has to cover a cold
+	// local model load, not just generation: the first call of a run pays the
+	// weight-loading cost, which can exceed 30s even though warm calls on the
+	// same model return in a few seconds.
+	enrichTimeout = 45 * time.Second
 )
 
 // Engine orchestrates config loading, scraping, AI enrichment, and template generation.
@@ -105,6 +111,7 @@ func NewEngine(paths Paths, dbPool *db.Pool) (*Engine, error) {
 	if dbPool != nil {
 		sink = dbPool
 	}
+	eventLog := events.New(sink)
 
 	return &Engine{
 		accounts:       accounts,
@@ -113,9 +120,9 @@ func NewEngine(paths Paths, dbPool *db.Pool) (*Engine, error) {
 		scraperFactory: scraper.GetScraper,
 		postGenerator:  generator.GeneratePost,
 		fbPublisher:    publisher.NewFacebookPublisher(),
-		aiEnricher:     ai.New(),
+		aiEnricher:     ai.New(eventLog),
 		db:             dbPool,
-		events:         events.New(sink),
+		events:         eventLog,
 	}, nil
 }
 
@@ -265,7 +272,7 @@ func (e *Engine) GeneratePostsWithPublish(ctx context.Context, urls []string, ac
 				// The enriched fields are then fed into each account's unique .tmpl template.
 				// UseAI defaults to true; accounts can opt out by setting UseAI=false.
 				if acc.UseAI {
-					enrichCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+					enrichCtx, cancel := context.WithTimeout(ai.WithTrace(ctx, traceID), enrichTimeout)
 					productForAccount = e.aiEnricher.Enrich(enrichCtx, productForAccount, acc)
 					cancel()
 				}
