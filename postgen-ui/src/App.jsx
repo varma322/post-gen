@@ -7,7 +7,7 @@ import ActivityLog from './screens/ActivityLog';
 import Analytics from './screens/Analytics';
 import Channels from './screens/Channels';
 import ContentQueue from './screens/ContentQueue';
-import Generator from './screens/Generator';
+import Publisher from './screens/Publisher';
 import AutoPublisher from './screens/AutoPublisher';
 import TemplatesManager from './screens/TemplatesManager';
 import AccountsManager from './screens/AccountsManager';
@@ -143,7 +143,7 @@ export default function App() {
       </Pane>
 
       <Pane active={activeTab === 'publisher'}>
-        <Generator apiFetch={apiFetch} accounts={accounts} onNavigateToAccounts={() => selectTab('accounts')} />
+        <Publisher apiFetch={apiFetch} accounts={accounts} onNavigate={selectTab} />
       </Pane>
 
       <Pane active={activeTab === 'channels'}>

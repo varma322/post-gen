@@ -299,6 +299,7 @@ func (e *Engine) GeneratePostsWithPublish(ctx context.Context, urls []string, ac
 					URL:          url,
 					Account:      acc.Name,
 					Output:       post,
+					TraceID:      traceID,
 					ProductTitle: productForAccount.Title,
 					Product:      productForAccount,
 				}

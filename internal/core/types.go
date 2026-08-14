@@ -26,10 +26,14 @@ func DefaultPaths() Paths {
 
 // Result captures the generated content or error for a URL/account pair.
 type Result struct {
-	URL          string         `json:"url"`
-	Account      string         `json:"account"`
-	Output       string         `json:"output"`
-	Error        string         `json:"error"`
+	URL     string `json:"url"`
+	Account string `json:"account"`
+	Output  string `json:"output"`
+	Error   string `json:"error"`
+	// TraceID ties this result to its pipeline events, so a caller can look up
+	// which AI provider actually produced the copy, how long each stage took,
+	// and why a stage failed - without any of that being duplicated here.
+	TraceID      string         `json:"trace_id,omitempty"`
 	PublishID    string         `json:"publish_id,omitempty"`
 	PublishError string         `json:"publish_error,omitempty"`
 	ProductTitle string         `json:"-"`
