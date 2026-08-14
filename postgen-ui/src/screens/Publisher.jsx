@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button, Card, CardHeader, EmptyState, ErrorNotice, Skeleton, StatusPill,
 } from '../components/ui';
@@ -37,11 +37,17 @@ export default function Publisher({ apiFetch, accounts = [], onNavigate }) {
 
   // Default to every active channel that still has quota left, which is the
   // selection someone almost always wants.
+  //
+  // Applied once, on the first load that returns channels - not whenever the
+  // selection is empty. Keying it off selected.size meant clearing the
+  // selection re-ran this effect and immediately re-selected everything, so
+  // "None" appeared to do nothing at all.
+  const defaultsApplied = useRef(false);
   useEffect(() => {
-    if (channels.length === 0 || selected.size > 0) return;
-    const available = channels.filter((c) => c.active && quotaLeft(c) !== 0).map((c) => c.account_name);
-    setSelected(new Set(available));
-  }, [channels, selected.size]);
+    if (defaultsApplied.current || channels.length === 0) return;
+    defaultsApplied.current = true;
+    setSelected(new Set(channels.filter((c) => c.active && quotaLeft(c) !== 0).map((c) => c.account_name)));
+  }, [channels]);
 
   const toggle = (name) => {
     setSelected((current) => {
