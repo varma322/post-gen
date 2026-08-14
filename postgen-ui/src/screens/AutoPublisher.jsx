@@ -10,6 +10,7 @@ export default function AutoPublisher({ apiFetch, accounts, active }) {
   const [newUrls, setNewUrls] = useState('');
   const [activeJob, setActiveJob] = useState(null);
   const [actionStatus, setActionStatus] = useState('');
+  const [rotateOldLinks, setRotateOldLinks] = useState(false);
 
   const loadQueuedProducts = async () => {
     setQueueLoading(true);
@@ -106,7 +107,11 @@ export default function AutoPublisher({ apiFetch, accounts, active }) {
 
   const handleTriggerAutoPost = async () => {
     try {
-      const resp = await apiFetch("/jobs", { method: "POST" });
+      const resp = await apiFetch("/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rotate_old_links: rotateOldLinks })
+      });
       if (resp.ok) {
         setActionStatus(`Auto-post job triggered!`);
         setTimeout(() => setActionStatus(""), 3000);
@@ -189,6 +194,21 @@ export default function AutoPublisher({ apiFetch, accounts, active }) {
             </div>
           </div>
           <div className="mt-6 flex flex-col gap-2">
+            {!activeJob && (
+              <label className="flex items-start gap-2 text-xs text-on-surface-variant mb-1 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={rotateOldLinks}
+                  onChange={(e) => setRotateOldLinks(e.target.checked)}
+                  className="mt-0.5 rounded border-outline-variant"
+                />
+                <span>
+                  <span className="font-semibold text-on-surface">Rotate old links</span> — if an account has no
+                  unposted links left in its pool or the shared queue, repost its least-recently-used link instead
+                  of skipping it.
+                </span>
+              </label>
+            )}
             {activeJob ? (
               <button
                 onClick={handleCancelAutoPost}
@@ -200,7 +220,7 @@ export default function AutoPublisher({ apiFetch, accounts, active }) {
             ) : (
               <button
                 onClick={handleTriggerAutoPost}
-                disabled={queuedProducts.length === 0}
+                disabled={queuedProducts.length === 0 && !rotateOldLinks}
                 className="w-full bg-primary text-on-secondary hover:bg-primary-fixed-dim disabled:bg-surface-container-high disabled:text-on-surface-variant/50 px-5 py-3 rounded-lg font-bold text-sm transition-all flex items-center justify-center gap-2 shadow-lg"
               >
                 <span className="material-symbols-outlined text-base">play_arrow</span>

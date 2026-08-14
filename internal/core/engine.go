@@ -586,7 +586,12 @@ func (e *Engine) DeleteAccountLink(ctx context.Context, id int) error {
 // draws links preferentially from that account's own dedicated link pool
 // (falling back to the shared product queue for any shortfall) up to however
 // many posts it still has left in its daily quota, and creates a job.
-func (e *Engine) TriggerAutoPostJob(ctx context.Context) (int, error) {
+//
+// If rotateOldLinks is true, an account that still has no candidates after
+// both fresh sources are exhausted falls back further to reposting its own
+// least-recently-used links (from its pool, then the shared queue) instead of
+// being left out of the job entirely.
+func (e *Engine) TriggerAutoPostJob(ctx context.Context, rotateOldLinks bool) (int, error) {
 	if e.db == nil {
 		return 0, fmt.Errorf("database required for auto post jobs")
 	}
@@ -682,6 +687,47 @@ func (e *Engine) TriggerAutoPostJob(ctx context.Context) (int, error) {
 				assignedForAccount[url] = true
 				jobItems = append(jobItems, models.JobItem{AccountName: acc.Name, ProductURL: url})
 				added++
+			}
+		}
+
+		// Last resort: both fresh sources are exhausted for this account.
+		// Rather than skip it, repost its own least-recently-used links so the
+		// pipeline keeps running instead of stalling until new links are added.
+		if added < batchSize && rotateOldLinks {
+			rotationLinks, err := e.db.GetRotationCandidateAccountLinks(ctx, acc.Name, batchSize)
+			if err != nil {
+				log.Printf("[WARN] Failed to get rotation pool links for account %s: %v", acc.Name, err)
+			}
+			for _, link := range rotationLinks {
+				if added >= batchSize {
+					break
+				}
+				if assignedForAccount[link.URL] {
+					continue
+				}
+				assignedForAccount[link.URL] = true
+				jobItems = append(jobItems, models.JobItem{AccountName: acc.Name, ProductURL: link.URL})
+				added++
+			}
+
+			if added < batchSize {
+				rotationCandidates, err := e.db.GetRotationCandidateProductsForAccount(ctx, acc.Name, batchSize)
+				if err != nil {
+					log.Printf("[WARN] Failed to get rotation candidates for account %s: %v", acc.Name, err)
+					rotationCandidates = nil
+				}
+				for i := range rotationCandidates {
+					if added >= batchSize {
+						break
+					}
+					url := rotationCandidates[i].URL
+					if assignedForAccount[url] {
+						continue
+					}
+					assignedForAccount[url] = true
+					jobItems = append(jobItems, models.JobItem{AccountName: acc.Name, ProductURL: url})
+					added++
+				}
 			}
 		}
 

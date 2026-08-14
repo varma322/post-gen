@@ -24,7 +24,7 @@ type Generator interface {
 	AddAccountLink(ctx context.Context, accountName, url string) error
 	GetAccountLinks(ctx context.Context, accountName string) ([]models.AccountLink, error)
 	DeleteAccountLink(ctx context.Context, id int) error
-	TriggerAutoPostJob(ctx context.Context) (int, error)
+	TriggerAutoPostJob(ctx context.Context, rotateOldLinks bool) (int, error)
 	GetActiveJob(ctx context.Context) (*models.PublicationJob, error)
 	CancelActiveJobs(ctx context.Context) error
 }
@@ -96,6 +96,10 @@ type server struct {
 
 type accountLinkRequest struct {
 	URL string `json:"url"`
+}
+
+type triggerJobRequest struct {
+	RotateOldLinks bool `json:"rotate_old_links"`
 }
 
 type affiliateLinkRequest struct {

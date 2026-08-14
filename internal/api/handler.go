@@ -847,7 +847,15 @@ func (s server) handleJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobID, err := s.engine.TriggerAutoPostJob(r.Context())
+	// Body is optional (existing callers send none), so a missing or empty
+	// body just leaves RotateOldLinks at its false default.
+	var req triggerJobRequest
+	if r.Body != nil {
+		defer r.Body.Close()
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+
+	jobID, err := s.engine.TriggerAutoPostJob(r.Context(), req.RotateOldLinks)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

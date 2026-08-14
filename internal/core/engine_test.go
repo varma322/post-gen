@@ -377,7 +377,7 @@ func TestQueueAndAutoPostRequiresDatabase(t *testing.T) {
 		t.Fatalf("expected database required error, got %v", err)
 	}
 
-	_, err = engine.TriggerAutoPostJob(context.Background())
+	_, err = engine.TriggerAutoPostJob(context.Background(), false)
 	if err == nil || !strings.Contains(err.Error(), "database required") {
 		t.Fatalf("expected database required error, got %v", err)
 	}

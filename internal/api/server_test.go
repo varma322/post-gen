@@ -86,7 +86,7 @@ func (s stubGenerator) DeleteAccountLink(ctx context.Context, id int) error {
 	return nil
 }
 
-func (s stubGenerator) TriggerAutoPostJob(ctx context.Context) (int, error) {
+func (s stubGenerator) TriggerAutoPostJob(ctx context.Context, rotateOldLinks bool) (int, error) {
 	return 0, nil
 }
 

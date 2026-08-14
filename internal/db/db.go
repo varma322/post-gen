@@ -714,6 +714,81 @@ func (p *Pool) GetCandidateAccountLinks(ctx context.Context, accountName string,
 	return links, nil
 }
 
+// GetRotationCandidateAccountLinks returns up to limit links from the
+// account's dedicated pool regardless of whether they've already been
+// published for that account, ordered by the last time (if any) they were
+// posted for it, oldest/never-posted first. Used by TriggerAutoPostJob as a
+// last-resort fallback (rotateOldLinks=true) so an account with a fully
+// exhausted pool can repost its least-recently-used links instead of being
+// skipped entirely.
+func (p *Pool) GetRotationCandidateAccountLinks(ctx context.Context, accountName string, limit int) ([]models.AccountLink, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT al.id, al.account_name, al.url, al.created_at
+		FROM account_links al
+		LEFT JOIN (
+		    SELECT product_url, MAX(created_at) AS last_posted_at
+		    FROM published_posts
+		    WHERE account_name = $1
+		    GROUP BY product_url
+		) pp ON pp.product_url = al.url
+		WHERE al.account_name = $1
+		ORDER BY pp.last_posted_at ASC NULLS FIRST
+		LIMIT $2
+	`, accountName, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var links []models.AccountLink
+	for rows.Next() {
+		var link models.AccountLink
+		if err := rows.Scan(&link.ID, &link.AccountName, &link.URL, &link.CreatedAt); err != nil {
+			return nil, err
+		}
+		links = append(links, link)
+	}
+	return links, nil
+}
+
+// GetRotationCandidateProductsForAccount is the shared-queue counterpart to
+// GetRotationCandidateAccountLinks: it returns queued products regardless of
+// whether the account already posted them, ordered oldest/never-posted-by-
+// this-account first.
+func (p *Pool) GetRotationCandidateProductsForAccount(ctx context.Context, accountName string, limit int) ([]models.QueuedProduct, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT qp.id, qp.url, qp.title, qp.price, qp.image_url, qp.scraped_data, qp.status, qp.created_at
+		FROM queued_products qp
+		LEFT JOIN (
+		    SELECT product_url, MAX(created_at) AS last_posted_at
+		    FROM published_posts
+		    WHERE account_name = $1
+		    GROUP BY product_url
+		) pp ON pp.product_url = qp.url
+		WHERE qp.status = 'queued'
+		ORDER BY pp.last_posted_at ASC NULLS FIRST
+		LIMIT $2
+	`, accountName, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var products []models.QueuedProduct
+	for rows.Next() {
+		var qp models.QueuedProduct
+		var scrapedJSON []byte
+		if err := rows.Scan(&qp.ID, &qp.URL, &qp.Title, &qp.Price, &qp.ImageURL, &scrapedJSON, &qp.Status, &qp.CreatedAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(scrapedJSON, &qp.ScrapedData); err != nil {
+			return nil, err
+		}
+		products = append(products, qp)
+	}
+	return products, nil
+}
+
 // CountPostsTodayForAccount returns how many posts the given account has
 // published since the start of the current calendar day.
 func (p *Pool) CountPostsTodayForAccount(ctx context.Context, accountName string) (int, error) {
