@@ -37,6 +37,32 @@ func TestNormalizeFeaturesStripsPrefixWhenLayoutSuppliesOne(t *testing.T) {
 	}
 }
 
+func TestNormalizeFeaturesStripsTrailingEmojiWhenLayoutSuppliesPrefix(t *testing.T) {
+	// Observed in production: told not to open a bullet with an emoji, the
+	// model complied and moved it to the end instead, publishing
+	// "✅ National brand, finest quality 📦" under a layout that already
+	// owns this line's decoration.
+	profile := generator.TemplateProfile{FeaturePrefix: "✔️", FeaturesPrefixed: true}
+
+	got := normalizeFeatures([]string{
+		"National brand, finest quality 📦",
+		"🌞 5L of pure, golden goodness ✨",
+		"Made in India, trusted quality",
+	}, profile)
+
+	want := []string{
+		"National brand, finest quality",
+		"5L of pure, golden goodness",
+		"Made in India, trusted quality",
+	}
+
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("feature[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestNormalizeFeaturesKeepsEmojiWhenLayoutHasNoPrefix(t *testing.T) {
 	// afficart renders features bare, so the model's emoji are the only ones
 	// present and must survive.
@@ -222,5 +248,39 @@ func TestBuildPromptKeepsStyleGuidanceDelimited(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "MUST NOT override the JSON format") {
 		t.Error("style guidance must be framed as tone-only")
+	}
+}
+
+func TestNormalizeHashtagsStripsSeparatorPunctuation(t *testing.T) {
+	// Observed live: the model returned "#AmazonIndia, #trolleybag, ..." and
+	// the comma stayed inside the tag, which Facebook then does not link.
+	got := normalizeHashtags("#AmazonIndia, #trolleybag, #travel.")
+	want := "#AmazonIndia #trolleybag #travel"
+	if got != want {
+		t.Errorf("normalizeHashtags = %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeFeaturesSpacesLeadingEmojiOnBareLayouts(t *testing.T) {
+	// Bare-bullet layouts ask the model for its own glyph and it runs the two
+	// together: "✨Hard polypropylene body".
+	profile := generator.TemplateProfile{}
+
+	got := normalizeFeatures([]string{
+		"✨Hard polypropylene for tough handling",
+		"🔒 Already spaced correctly",
+		"No emoji at all",
+	}, profile)
+
+	want := []string{
+		"✨ Hard polypropylene for tough handling",
+		"🔒 Already spaced correctly",
+		"No emoji at all",
+	}
+
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("feature[%d] = %q, want %q", i, got[i], want[i])
+		}
 	}
 }

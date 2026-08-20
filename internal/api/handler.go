@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"strconv"
-	"text/template"
 	"time"
 
 	"post-gen/internal/core"
@@ -55,7 +54,7 @@ func newServer(engine Generator, templatesDir string, token string) http.Handler
 	mux.HandleFunc("/settings", srv.handleSettings)
 	mux.HandleFunc("/schedules", srv.handleSchedules)
 	mux.HandleFunc("/schedules/", srv.handleScheduleByID)
-	mux.Handle("/", http.FileServer(http.FS(postgenWeb.FS)))
+	mux.Handle("/", postgenWeb.SPAHandler(postgenWeb.FS))
 
 	// Protect all routes except /health and static frontend files with Bearer token auth.
 	// This allows the Web UI to load so the user can enter their token.
@@ -232,6 +231,15 @@ func (s server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// AI enrichment is what turns the raw scrape into post copy that fits the
+	// account's template. Leaving it at the zero value shipped accounts that
+	// rendered the untouched Amazon title and bullet list, so it is on unless
+	// the request explicitly opts out.
+	useAI := true
+	if req.UseAI != nil {
+		useAI = *req.UseAI
+	}
+
 	newAcc := models.Account{
 		Name:                req.Name,
 		TemplatePath:        req.TemplatePath,
@@ -239,6 +247,7 @@ func (s server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		FacebookPageID:      req.FacebookPageID,
 		FacebookAccessToken: req.FacebookAccessToken,
 		Active:              req.Active,
+		UseAI:               useAI,
 		ExtraParams:         req.ExtraParams,
 		MaxPostsPerDay:      req.MaxPostsPerDay,
 		ActiveHoursStart:    req.ActiveHoursStart,
@@ -284,6 +293,9 @@ func (s server) handleUpdateAccount(w http.ResponseWriter, r *http.Request, name
 			acc.FacebookAccessToken = req.FacebookAccessToken
 			if req.Active != nil {
 				acc.Active = req.Active
+			}
+			if req.UseAI != nil {
+				acc.UseAI = *req.UseAI
 			}
 			if req.ExtraParams != nil {
 				acc.ExtraParams = req.ExtraParams
@@ -633,7 +645,7 @@ func (s server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request, nam
 		return
 	}
 
-	if _, err := template.New(name).Parse(req.Content); err != nil {
+	if err := generator.Validate(name, req.Content); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "template parse error: " + err.Error()})
 		return
 	}

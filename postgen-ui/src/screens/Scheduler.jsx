@@ -314,7 +314,74 @@ function ActiveRun({ job, apiFetch, onChanged }) {
           <div className="h-full rounded-full bg-primary transition-[width] duration-500" style={{ width: `${percent}%` }} />
         </div>
       </div>
+
+      <JobItemTable items={items} />
     </Card>
+  );
+}
+
+/**
+ * The run's individual items, in the order the worker will take them.
+ *
+ * The aggregate counts above say how much is left but not what is left, which
+ * is the question being asked when a run looks stuck: which channel is holding
+ * it up, and did something already fail. Items come back ordered by id, which
+ * is the order the worker scans them in, so this reads as the actual queue.
+ */
+function JobItemTable({ items }) {
+  if (items.length === 0) return null;
+
+  return (
+    <div className="mt-4 border-t border-outline-variant pt-3">
+      <div className="mb-2 text-label-sm font-medium uppercase tracking-wide text-on-surface-variant">
+        Queue — {items.length} {items.length === 1 ? 'item' : 'items'}
+      </div>
+
+      {/* Capped so a large run doesn't push the schedules table off screen. */}
+      <div className="max-h-80 overflow-auto rounded border border-outline-variant">
+        <table className="w-full min-w-[560px] text-body-sm">
+          <thead className="sticky top-0 bg-surface-container-low">
+            <tr className="border-b border-outline-variant text-label-sm uppercase text-on-surface-variant">
+              <th className="px-3 py-2 text-left font-medium">Channel</th>
+              <th className="px-3 py-2 text-left font-medium">Product</th>
+              <th className="px-3 py-2 text-left font-medium">Status</th>
+              <th className="px-3 py-2 text-right font-medium">Detail</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => (
+              <tr
+                key={item.id}
+                className={`border-b border-outline-variant/50 last:border-0 ${
+                  item.status === 'publishing' ? 'bg-primary/10' : ''
+                }`}
+              >
+                <td className="whitespace-nowrap px-3 py-2 text-on-surface">{item.account_name}</td>
+                <td className="max-w-[280px] px-3 py-2">
+                  <a
+                    href={item.product_url}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="block truncate font-label text-on-surface-variant hover:text-primary hover:underline"
+                    title={item.product_url}
+                  >
+                    {item.product_url}
+                  </a>
+                </td>
+                <td className="px-3 py-2"><StatusPill status={item.status} /></td>
+                <td className="max-w-[200px] px-3 py-2 text-right text-on-surface-variant">
+                  {item.error_message
+                    ? <span className="block truncate text-error" title={item.error_message}>{item.error_message}</span>
+                    : item.published_at
+                      ? relativeTime(item.published_at)
+                      : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 

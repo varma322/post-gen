@@ -13,6 +13,13 @@ var (
 	cacheMutex sync.RWMutex
 )
 
+// postFuncs are the helpers templates may call. Kept deliberately small: a
+// template is account-owned content edited through the UI, so every function
+// exposed here is one more thing a non-programmer can get wrong.
+var postFuncs = template.FuncMap{
+	"money": FormatMoney,
+}
+
 // GeneratePost takes a product and a template path, and returns the rendered string.
 // Parsed templates are cached by path to avoid redundant disk I/O during bulk runs.
 func GeneratePost(product models.Product, templatePath string) (string, error) {
@@ -26,7 +33,7 @@ func GeneratePost(product models.Product, templatePath string) (string, error) {
 			return "", err
 		}
 
-		newTmpl, err := template.New("post").Parse(string(tmplData))
+		newTmpl, err := template.New("post").Funcs(postFuncs).Parse(string(tmplData))
 		if err != nil {
 			return "", err
 		}
@@ -46,6 +53,14 @@ func GeneratePost(product models.Product, templatePath string) (string, error) {
 	}
 
 	return buf.String(), nil
+}
+
+// Validate reports whether source parses as a post template. It must use the
+// same FuncMap as GeneratePost, or the API would reject a template on save
+// that the renderer would have handled - and accept one it cannot render.
+func Validate(name, source string) error {
+	_, err := template.New(name).Funcs(postFuncs).Parse(source)
+	return err
 }
 
 // InvalidateCache removes a template from the in-memory caches by its path.

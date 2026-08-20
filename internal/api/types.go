@@ -61,6 +61,10 @@ type accountRequest struct {
 	FacebookPageID      string            `json:"facebook_page_id"`
 	FacebookAccessToken string            `json:"facebook_access_token"`
 	Active              *bool             `json:"active,omitempty"`
+	// UseAI is a pointer so an absent key is distinguishable from an explicit
+	// false: create defaults it to true, and update leaves the stored value
+	// alone rather than silently switching enrichment off.
+	UseAI               *bool             `json:"use_ai,omitempty"`
 	ExtraParams         map[string]string `json:"extra_params,omitempty"`
 	MaxPostsPerDay      int               `json:"max_posts_per_day"`
 	ActiveHoursStart    string            `json:"active_hours_start"`

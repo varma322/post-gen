@@ -5,7 +5,12 @@
 {{.}}
 {{- end}}
 
-💰 Deal Price: ₹{{.DealPrice}}{{if .Discount}} ({{.Discount}}% OFF!){{end}}
+💰 Deal Price: ₹{{money .DealPrice}}{{if .Discount}} ({{.Discount}}% OFF!){{end}}
+{{- if .Discount}}
+🏷️ M.R.P.: ₹{{money .MRP}}
+{{- end}}
 🛒 Buy on Amazon: {{.Link}}
 
 ✨ {{if .Tagline}}{{.Tagline}}{{else}}Grab this deal before it’s gone!{{end}}
+
+{{.Hashtags}}

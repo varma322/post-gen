@@ -1,12 +1,17 @@
 {{if .Headline}}{{.Headline}}{{else}}{{.Title}}{{end}}
-
-{{if .Description}}{{.Description}}{{end}}
-
+{{if .Description}}
+{{.Description}}
+{{end}}
 {{- range .Features}}
-✅ {{.}}
+{{.}}
 {{- end}}
 
-💥 Price: ₹{{.DealPrice}}{{if .Discount}} ({{.Discount}}% OFF){{end}}
+💥 Price: ₹{{money .DealPrice}}{{if .Discount}} ({{.Discount}}% OFF){{end}}
+{{- if .Discount}}
+🏷️ M.R.P.: ₹{{money .MRP}}
+{{- end}}
 🚚 Fulfilled by Amazon | Inclusive of All Taxes
 
-{{.Link}}
+🛒 Grab This Deal 👉 {{.Link}}
+
+{{.Hashtags}}

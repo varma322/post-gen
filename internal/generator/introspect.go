@@ -199,6 +199,30 @@ func StripLeadingDecoration(s string) string {
 	return s
 }
 
+// SpaceAfterLeadingEmoji inserts a single space between a bullet's leading
+// emoji and its text when the model ran them together.
+//
+// Layouts that render features bare ask the model to supply its own glyph per
+// bullet, and it frequently returns "✨Hard polypropylene body" - readable in
+// JSON, cramped in a published post next to the layout's own spaced lines.
+// Bullets with no leading emoji, or that already have the space, are returned
+// untouched.
+func SpaceAfterLeadingEmoji(s string) string {
+	runes := []rune(s)
+
+	i := 0
+	for i < len(runes) && (isEmojiBase(runes[i]) || isEmojiModifier(runes[i]) || runes[i] == zeroWidthJoiner) {
+		i++
+	}
+
+	// No leading emoji, nothing after it, or already separated.
+	if i == 0 || i >= len(runes) || unicode.IsSpace(runes[i]) {
+		return s
+	}
+
+	return string(runes[:i]) + " " + string(runes[i:])
+}
+
 // StripSurroundingDecoration removes emoji, bullets, and whitespace from both
 // ends of s. Used for fields the layout already wraps in its own glyphs.
 func StripSurroundingDecoration(s string) string {

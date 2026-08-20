@@ -4,6 +4,7 @@ import (
 	"embed"
 	"io/fs"
 	"net/http"
+	"strings"
 )
 
 //go:embed index.html app.js styles.css favicon.svg icons.svg
@@ -22,25 +23,31 @@ type spaFileServer struct {
 
 // ServeHTTP implements http.Handler, serving files or falling back to index.html for SPA routing.
 func (s *spaFileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Try to serve the requested file
-	_, err := fs.Stat(FS, r.URL.Path[1:]) // Remove leading /
-	if err == nil {
-		// File exists, serve it normally
+	path := strings.TrimPrefix(r.URL.Path, "/")
+	if path == "" {
 		s.handler.ServeHTTP(w, r)
 		return
 	}
 
-	// File doesn't exist; check if it's a known static extension
-	// If it's not (e.g., /app/dashboard instead of /index.html), fall back to SPA index
+	// Try to serve the requested file if it exists in the embed FS
+	if _, err := fs.Stat(FS, path); err == nil {
+		s.handler.ServeHTTP(w, r)
+		return
+	}
+
+	// File doesn't exist; check if it's a route (no extension or .html) and serve index.html
 	ext := getExtension(r.URL.Path)
 	if ext == "" || ext == ".html" {
-		// No extension or .html → likely a route; serve index.html for client-side routing
-		r.URL.Path = "/index.html"
-		s.handler.ServeHTTP(w, r)
-		return
+		data, err := fs.ReadFile(FS, "index.html")
+		if err == nil {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(data)
+			return
+		}
 	}
 
-	// Unknown file (e.g., .js without .map, .css not found) → 404
+	// Unknown static file -> 404
 	w.WriteHeader(http.StatusNotFound)
 }
 

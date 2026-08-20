@@ -37,6 +37,26 @@ export default defineConfig({
       '/jobs': {
         target: 'http://localhost:8088',
         changeOrigin: true,
+      },
+      '/events': {
+        target: 'http://localhost:8088',
+        changeOrigin: true,
+      },
+      '/analytics': {
+        target: 'http://localhost:8088',
+        changeOrigin: true,
+      },
+      '/worker': {
+        target: 'http://localhost:8088',
+        changeOrigin: true,
+      },
+      '/settings': {
+        target: 'http://localhost:8088',
+        changeOrigin: true,
+      },
+      '/schedules': {
+        target: 'http://localhost:8088',
+        changeOrigin: true,
       }
     }
   },

@@ -6,8 +6,14 @@
 {{- end}}
 
 💰 Price
-💵 ₹{{.DealPrice}}
+{{- if .Discount}}
+🏷️ M.R.P.: ₹{{money .MRP}}
+💵 Offer Price: ₹{{money .DealPrice}}
+🎉 You Save: {{.Discount}}% OFF
+{{- else}}
+💵 ₹{{money .DealPrice}}
+{{- end}}
 
 👉 {{.Link}}
 
-{{if .Hashtags}}{{.Hashtags}}{{else}}#Deals #AmazonFinds #SmartBuy{{end}}
+{{.Hashtags}}

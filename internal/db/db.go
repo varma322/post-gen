@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -38,6 +39,7 @@ func New(ctx context.Context) (*Pool, error) {
 	config.MaxConns = 10
 	config.MinConns = 2
 	config.MaxConnLifetime = time.Hour
+	config.AfterConnect = registerLocalTimestampCodec
 
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
@@ -56,6 +58,32 @@ func New(ctx context.Context) (*Pool, error) {
 	}
 
 	return p, nil
+}
+
+// registerLocalTimestampCodec makes 'timestamp without time zone' columns decode
+// into the server's local zone rather than being relabelled UTC.
+//
+// Every timestamp column here is 'without time zone', and both writers agree on
+// what goes in: CURRENT_TIMESTAMP defaults store the Postgres session's local
+// wall clock, and pgx discards the zone on a Go time.Time, storing that same
+// local wall clock. Reading it back is where they diverged - pgx's default
+// ScanLocation is nil, which stamps the decoded value UTC, so a post published
+// at 12:02 IST was served as "12:02Z" and rendered by the browser as 17:32.
+// The instant was wrong by exactly the local offset on every DB-sourced
+// timestamp in the API, while the worker's in-memory status - marshalled
+// straight from time.Now() with its real +05:30 - stayed correct, so the two
+// disagreed on the same dashboard.
+//
+// This assumes the app and Postgres share a timezone, which is the same
+// assumption the stored wall clocks already encode. Moving either one alone
+// breaks that; the durable fix is timestamptz columns.
+func registerLocalTimestampCodec(_ context.Context, conn *pgx.Conn) error {
+	conn.TypeMap().RegisterType(&pgtype.Type{
+		Name:  "timestamp",
+		OID:   pgtype.TimestampOID,
+		Codec: &pgtype.TimestampCodec{ScanLocation: time.Local},
+	})
+	return nil
 }
 
 // Close releases the connection pool.

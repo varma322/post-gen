@@ -129,6 +129,10 @@ func buildPrompt(p models.Product, extraPrompt string, profile generator.Templat
 	}
 
 	sb.WriteString("\nRules:\n")
+	// Without this the 7B local model intermittently returns a whole post in
+	// Chinese - observed end to end on zonerush.tmpl, which would have gone
+	// straight to a Facebook page.
+	sb.WriteString("- Write EVERY field in English. Do not use any other language or script\n")
 	sb.WriteString("- Keep all monetary values (prices) UNCHANGED - do not modify ₹ prices\n")
 	sb.WriteString("- Write in a persuasive, engaging tone suitable for Facebook posts\n")
 	// Only mention hashtags when the layout renders them. Stating the rule
@@ -138,6 +142,11 @@ func buildPrompt(p models.Product, extraPrompt string, profile generator.Templat
 		sb.WriteString("- Hashtags must include #AmazonIndia and be relevant to the product\n")
 	} else {
 		sb.WriteString("- Do NOT include hashtags anywhere in your output\n")
+	}
+	if rendersPrices(profile) {
+		sb.WriteString("- The layout prints the price, M.R.P. and discount on their own lines. " +
+			"Do NOT repeat any price, rupee amount, or discount percentage inside the features, " +
+			"description, headline, or tagline\n")
 	}
 	sb.WriteString("- Do NOT wrap JSON in code blocks or markdown - output raw JSON only\n")
 
@@ -195,18 +204,36 @@ func decoratedGeneratableFields(profile generator.TemplateProfile) []string {
 	return keys
 }
 
+// rendersPrices reports whether the layout prints any price figure itself, in
+// which case generated copy must not restate one.
+func rendersPrices(profile generator.TemplateProfile) bool {
+	return profile.Uses("DealPrice") || profile.Uses("MRP") || profile.Uses("Discount")
+}
+
 // normalizeFeatures trims each feature and, when the template prints its own
-// prefix, strips any leading emoji or bullet the model added anyway. Entries
-// left empty are dropped rather than rendered as a bare prefix.
+// prefix, strips any emoji or bullet the model added at either end anyway.
+// Entries left empty are dropped rather than rendered as a bare prefix.
 func normalizeFeatures(features []string, profile generator.TemplateProfile) []string {
 	cleaned := make([]string, 0, len(features))
+	pricesShown := rendersPrices(profile)
 
 	for _, feature := range features {
 		feature = strings.TrimSpace(feature)
-		if profile.FeaturesPrefixed {
-			feature = generator.StripLeadingDecoration(feature)
+		if !profile.FeaturesPrefixed {
+			// The layout supplies no glyph, so the model's own is the only
+			// one there - it just tends to omit the space after it.
+			feature = generator.SpaceAfterLeadingEmoji(feature)
+		} else {
+			// Both ends, not just the leading one: told not to open a bullet
+			// with an emoji, models reliably park it at the end instead,
+			// which renders as "✔️ Finest quality sunflower 📦" against a
+			// layout that already owns the decoration for that line.
+			feature = generator.StripSurroundingDecoration(feature)
 		}
-		if feature != "" {
+		// A bullet that restates the price duplicates the layout's own price
+		// block; there are several bullets, so dropping one costs less than
+		// keeping a stale or contradictory figure next to the affiliate link.
+		if feature != "" && !(pricesShown && mentionsPrice(feature)) {
 			cleaned = append(cleaned, feature)
 		}
 	}
@@ -235,9 +262,15 @@ func withoutGlyph(palette []string, glyph string) []string {
 func (c *EnrichedContent) applyTo(product models.Product, profile generator.TemplateProfile) models.Product {
 	out := product
 
+	pricesShown := rendersPrices(profile)
+
 	// plain strips the layout's own decoration back off a field it already
-	// wraps, so "🔥 {{.Title}} 🔥" can't render as "🔥 Camera 🔥 🔥".
+	// wraps, so "🔥 {{.Title}} 🔥" can't render as "🔥 Camera 🔥 🔥", and
+	// removes any price the model smuggled into a field it can write.
 	plain := func(field, value string) string {
+		if pricesShown {
+			value = stripPriceMentions(value)
+		}
 		if profile.Decorates(field) {
 			return generator.StripSurroundingDecoration(value)
 		}
@@ -274,6 +307,10 @@ func normalizeHashtags(raw string) string {
 	tags := make([]string, 0, len(fields))
 
 	for _, tag := range fields {
+		// Models routinely return a comma- or bullet-separated list. Left as
+		// is, the trailing punctuation lands inside the tag and Facebook stops
+		// linking it: "#AmazonIndia," is not a hashtag.
+		tag = strings.Trim(tag, `,;:.|/\-–—`)
 		tag = strings.TrimLeft(tag, "#")
 		if tag == "" {
 			continue

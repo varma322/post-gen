@@ -128,7 +128,7 @@ func TestProfileAgainstShippedTemplates(t *testing.T) {
 	}{
 		{
 			file:          "afficart.tmpl",
-			wantFields:    []string{"Title", "Features", "DealPrice", "Link", "Tagline"},
+			wantFields:    []string{"Title", "Features", "DealPrice", "MRP", "Discount", "Link", "Tagline", "Hashtags"},
 			wantPrefixed:  false,
 			wantSomeEmoji: true,
 		},
@@ -140,15 +140,29 @@ func TestProfileAgainstShippedTemplates(t *testing.T) {
 			mustNotUseFields: []string{"Features", "Tagline", "Hashtags"},
 		},
 		{
+			// priceswoop renders bullets bare so the model supplies a fitting
+			// emoji per benefit; smartbuy below keeps its uniform check mark.
 			file:          "priceswoop.tmpl",
-			wantFields:    []string{"Headline", "Description", "Features", "DealPrice", "Link"},
-			wantPrefixed:  true,
+			wantFields:    []string{"Headline", "Description", "Features", "DealPrice", "MRP", "Discount", "Link", "Hashtags"},
+			wantPrefixed:  false,
 			wantSomeEmoji: true,
 		},
 		{
 			file:          "smartbuy.tmpl",
-			wantFields:    []string{"Title", "Features", "DealPrice", "Link", "Hashtags"},
+			wantFields:    []string{"Title", "Features", "DealPrice", "MRP", "Discount", "Link", "Hashtags"},
 			wantPrefixed:  true,
+			wantSomeEmoji: true,
+		},
+		{
+			file:          "zonerush.tmpl",
+			wantFields:    []string{"Title", "Features", "DealPrice", "MRP", "Discount", "Link", "Tagline", "Hashtags"},
+			wantPrefixed:  false,
+			wantSomeEmoji: true,
+		},
+		{
+			file:          "hurrydeals.tmpl",
+			wantFields:    []string{"Headline", "Description", "Features", "DealPrice", "MRP", "Discount", "Link", "Tagline", "Hashtags"},
+			wantPrefixed:  false,
 			wantSomeEmoji: true,
 		},
 	}

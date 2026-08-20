@@ -644,3 +644,85 @@ func TestHandleGenerateLink(t *testing.T) {
 	}
 }
 
+
+// capturingGenerator records what SaveAccounts was handed, so a handler's
+// defaulting can be asserted on the value that would actually be persisted.
+type capturingGenerator struct {
+	stubGenerator
+	saved *[]models.Account
+}
+
+func (c capturingGenerator) SaveAccounts(accounts []models.Account) error {
+	*c.saved = accounts
+	return nil
+}
+
+// TestCreateAccountDefaultsUseAIOn is the regression that silently shipped raw
+// Amazon copy: handleCreateAccount never set UseAI, so every account added
+// through the UI got Go's zero value and skipped enrichment entirely.
+func TestCreateAccountDefaultsUseAIOn(t *testing.T) {
+	var saved []models.Account
+	handler := NewServer(capturingGenerator{saved: &saved}, "")
+
+	body := `{"name":"newpage","template_path":"templates/afficart.tmpl","affiliate_tag":"tag-21",
+		"facebook_page_id":"1","facebook_access_token":"t","max_posts_per_day":0,
+		"active_hours_start":"","active_hours_end":"","min_delay_minutes":0}`
+	req := httptest.NewRequest(http.MethodPost, "/accounts", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if len(saved) != 1 {
+		t.Fatalf("expected 1 saved account, got %d", len(saved))
+	}
+	if !saved[0].UseAI {
+		t.Errorf("UseAI = false for a new account; AI enrichment must be on by default")
+	}
+}
+
+func TestCreateAccountHonoursExplicitUseAIFalse(t *testing.T) {
+	var saved []models.Account
+	handler := NewServer(capturingGenerator{saved: &saved}, "")
+
+	body := `{"name":"rawpage","template_path":"templates/afficart.tmpl","use_ai":false,
+		"affiliate_tag":"","facebook_page_id":"","facebook_access_token":"",
+		"max_posts_per_day":0,"active_hours_start":"","active_hours_end":"","min_delay_minutes":0}`
+	req := httptest.NewRequest(http.MethodPost, "/accounts", strings.NewReader(body))
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if saved[0].UseAI {
+		t.Errorf("UseAI = true despite an explicit opt-out")
+	}
+}
+
+// TestUpdateAccountPreservesUseAIWhenAbsent covers the quick active/inactive
+// toggle, which resends a partial account body.
+func TestUpdateAccountPreservesUseAIWhenAbsent(t *testing.T) {
+	var saved []models.Account
+	existing := []models.Account{{Name: "afficart", TemplatePath: "templates/afficart.tmpl", UseAI: true}}
+	handler := NewServer(capturingGenerator{stubGenerator: stubGenerator{accounts: existing}, saved: &saved}, "")
+
+	body := `{"name":"afficart","template_path":"templates/afficart.tmpl","affiliate_tag":"",
+		"facebook_page_id":"","facebook_access_token":"","max_posts_per_day":0,
+		"active_hours_start":"","active_hours_end":"","min_delay_minutes":0}`
+	req := httptest.NewRequest(http.MethodPut, "/accounts/afficart", strings.NewReader(body))
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if !saved[0].UseAI {
+		t.Errorf("UseAI was reset to false by an update that never mentioned it")
+	}
+}

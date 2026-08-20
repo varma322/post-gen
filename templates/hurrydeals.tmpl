@@ -1,9 +1,17 @@
-{{.Title}}
-
-{{range .Features}}{{.}}
+{{if .Headline}}{{.Headline}}{{else}}{{.Title}}{{end}}
+{{if .Description}}
+{{.Description}}
 {{end}}
-💥 Price: ₹{{.DealPrice}}{{if .Discount}} ({{.Discount}}% OFF){{end}}
+{{- range .Features}}
+{{.}}
+{{- end}}
 
-{{.Link}}
-{{if .Tagline}}
-{{.Tagline}}{{end}}
+💸 Now at ₹{{money .DealPrice}} Only!{{if .Discount}} ({{.Discount}}% OFF){{end}}
+{{- if .Discount}}
+🏷️ M.R.P.: ₹{{money .MRP}}
+{{- end}}
+🛒 Buy Now 👉 {{.Link}}
+
+⚡ {{if .Tagline}}{{.Tagline}}{{else}}Limited stock — grab it before it’s gone!{{end}}
+
+{{.Hashtags}}

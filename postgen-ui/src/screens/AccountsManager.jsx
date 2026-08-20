@@ -11,6 +11,7 @@ export default function AccountsManager({ apiFetch, accounts, templates, onAccou
   const [accFormFbPageId, setAccFormFbPageId] = useState('');
   const [accFormFbToken, setAccFormFbToken] = useState('');
   const [accFormActive, setAccFormActive] = useState(true);
+  const [accFormUseAi, setAccFormUseAi] = useState(true);
   const [accFormMaxPostsPerDay, setAccFormMaxPostsPerDay] = useState(0);
   const [accFormActiveHoursStart, setAccFormActiveHoursStart] = useState('');
   const [accFormActiveHoursEnd, setAccFormActiveHoursEnd] = useState('');
@@ -113,6 +114,7 @@ export default function AccountsManager({ apiFetch, accounts, templates, onAccou
       setAccFormFbPageId(acc.facebook_page_id || "");
       setAccFormFbToken(acc.facebook_access_token || "");
       setAccFormActive(acc.active !== false);
+      setAccFormUseAi(acc.use_ai === true);
       setAccFormMaxPostsPerDay(acc.max_posts_per_day || 0);
       setAccFormActiveHoursStart(acc.active_hours_start || "");
       setAccFormActiveHoursEnd(acc.active_hours_end || "");
@@ -124,6 +126,7 @@ export default function AccountsManager({ apiFetch, accounts, templates, onAccou
       setAccFormFbPageId("");
       setAccFormFbToken("");
       setAccFormActive(true);
+      setAccFormUseAi(true);
       setAccFormMaxPostsPerDay(0);
       setAccFormActiveHoursStart("");
       setAccFormActiveHoursEnd("");
@@ -147,6 +150,7 @@ export default function AccountsManager({ apiFetch, accounts, templates, onAccou
       facebook_page_id: accFormFbPageId.trim(),
       facebook_access_token: accFormFbToken.trim(),
       active: accFormActive,
+      use_ai: accFormUseAi,
       max_posts_per_day: Number(accFormMaxPostsPerDay) || 0,
       active_hours_start: accFormActiveHoursStart,
       active_hours_end: accFormActiveHoursEnd,
@@ -191,6 +195,7 @@ export default function AccountsManager({ apiFetch, accounts, templates, onAccou
           facebook_page_id: acc.facebook_page_id || "",
           facebook_access_token: acc.facebook_access_token || "",
           active: nextActive,
+          use_ai: acc.use_ai === true,
           max_posts_per_day: acc.max_posts_per_day || 0,
           active_hours_start: acc.active_hours_start || "",
           active_hours_end: acc.active_hours_end || "",
@@ -372,6 +377,19 @@ export default function AccountsManager({ apiFetch, accounts, templates, onAccou
               />
               <label htmlFor="acc-form-active" className="text-sm font-semibold text-on-surface-variant">
                 Active (participates in Auto-Publisher candidate selection)
+              </label>
+            </div>
+
+            <div className="md:col-span-2 flex items-center gap-3">
+              <input
+                type="checkbox"
+                id="acc-form-use-ai"
+                checked={accFormUseAi}
+                onChange={(e) => setAccFormUseAi(e.target.checked)}
+                className="w-4 h-4"
+              />
+              <label htmlFor="acc-form-use-ai" className="text-sm font-semibold text-on-surface-variant">
+                AI copywriting (rewrites the title, features and tagline to fit the template &mdash; off posts the raw Amazon text)
               </label>
             </div>
           </div>
