@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,7 +27,53 @@ var asinRegex = regexp.MustCompile(`(?i)/(?:dp|gp/product|gp/aw/d|product)/([a-z
 var (
 	errCreatorsAPIIneligible     = errors.New("creators api: associate not eligible")
 	errCreatorsAPINetworkFailure = errors.New("creators api: network failure")
+	errCreatorsAPIThrottled      = errors.New("creators api: rate limit exceeded")
 )
+
+// defaultThrottleCooldown is how long the API is left alone after a 429 that
+// carries no Retry-After header.
+//
+// Throttling is a quota statement, not a hiccup: Amazon rates the Creators API
+// per second and per day, scaled to the account's revenue, so a 429 usually
+// means the daily allowance is gone rather than that the last second was busy.
+// Backing off for a quarter of an hour costs a few HTML scrapes; retrying in
+// two seconds costs quota that is already spent.
+const defaultThrottleCooldown = 15 * time.Minute
+
+// throttleError carries the server's own guidance on when to come back.
+type throttleError struct {
+	retryAfter time.Duration
+	detail     string
+}
+
+func (e *throttleError) Error() string {
+	if e.retryAfter > 0 {
+		return fmt.Sprintf("creators api: rate limit exceeded (retry after %s): %s", e.retryAfter, e.detail)
+	}
+	return fmt.Sprintf("creators api: rate limit exceeded: %s", e.detail)
+}
+
+// Unwrap lets callers match on the sentinel while still reading retryAfter.
+func (e *throttleError) Unwrap() error { return errCreatorsAPIThrottled }
+
+// cooldown is how long to stop calling the API for.
+func (e *throttleError) cooldown() time.Duration {
+	if e.retryAfter > 0 {
+		return e.retryAfter
+	}
+	return defaultThrottleCooldown
+}
+
+// parseRetryAfter reads the delay-seconds form of the Retry-After header.
+// The HTTP-date form is not handled: Amazon sends seconds, and a wrong parse
+// here would silently pick the default anyway.
+func parseRetryAfter(header string) time.Duration {
+	seconds, err := strconv.Atoi(strings.TrimSpace(header))
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
+}
 
 // Circuit breaker: disables Creators API calls per partner-tag/marketplace pair
 // when that pair is reported ineligible, so one ineligible combination doesn't
@@ -297,6 +344,17 @@ func (s *AmazonCreatorAPIScraper) ScrapeWithMeta(ctx context.Context, rawURL str
 			log.Printf("[WARN] Creators API: account not eligible for marketplace %s (partner tag rejected by Amazon). Disabling API for this partner tag/marketplace for 1 hour. Update AMAZON_CREATOR_PARTNER_TAG env var to an active Associates account tag.", marketplace)
 			return fellBack("associate not eligible")
 		}
+		// Throttling is checked before the network branch because a 429 is a
+		// well-formed answer from the API host, not evidence that Amazon is
+		// unreachable. The storefront serves HTML from a different host under
+		// a different limit, so the fallback is both available and correct -
+		// refusing it here is what turns "slow down" into a failed post.
+		var throttled *throttleError
+		if errors.As(err, &throttled) {
+			tripCreatorAPICircuit(partnerTag, marketplace, throttled.cooldown())
+			log.Printf("[WARN] Creators API: rate limit exceeded for %s. Pausing API calls for this partner tag/marketplace for %s and using HTML scraping meanwhile.", marketplace, throttled.cooldown())
+			return fellBack("rate limited")
+		}
 		if errors.Is(err, errCreatorsAPINetworkFailure) || strings.Contains(err.Error(), "no such host") || strings.Contains(err.Error(), "timeout") {
 			log.Printf("[ERR] Creators API failed due to network error: %v. Aborting HTML fallback to prevent CAPTCHA.", err)
 			return nil, ScrapeMeta{Source: "creators_api"}, err
@@ -356,7 +414,20 @@ func (s *AmazonCreatorAPIScraper) fetchFromAPI(ctx context.Context, asin, market
 
 		resp, err = client.Do(req)
 		if err == nil {
-			if resp.StatusCode == 429 || resp.StatusCode >= 500 {
+			// A quota that is already spent is not replenished by asking
+			// again eight seconds later; each retry only deepens the hole and
+			// delays the HTML fallback that would have worked. Give up on the
+			// first 429 and let the caller fall back.
+			if resp.StatusCode == 429 {
+				retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
+				snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+				resp.Body.Close()
+				return nil, &throttleError{
+					retryAfter: retryAfter,
+					detail:     strings.TrimSpace(string(snippet)),
+				}
+			}
+			if resp.StatusCode >= 500 {
 				snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 				resp.Body.Close()
 				err = fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
