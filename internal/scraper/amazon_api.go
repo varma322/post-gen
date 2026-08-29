@@ -1,7 +1,6 @@
 package scraper
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -248,9 +247,14 @@ type AmazonCreatorAPIScraper struct {
 	defaultPartnerTag string
 	tokenManager      *TokenManager
 	fallback          Scraper
+	// registry holds every API-eligible account when more than one is
+	// configured. It stays nil for the single-account setup, where there is
+	// nothing to select between.
+	registry *CredentialRegistry
 }
 
-// NewAmazonCreatorAPIScraper initializes the Creators API client wrapper.
+// NewAmazonCreatorAPIScraper initializes the Creators API client wrapper for a
+// single set of credentials.
 func NewAmazonCreatorAPIScraper(clientID, clientSecret, tokenURL, defaultPartnerTag string, fallback Scraper) *AmazonCreatorAPIScraper {
 	return &AmazonCreatorAPIScraper{
 		clientID:          clientID,
@@ -260,6 +264,24 @@ func NewAmazonCreatorAPIScraper(clientID, clientSecret, tokenURL, defaultPartner
 		tokenManager:      NewTokenManager(clientID, clientSecret, tokenURL),
 		fallback:          fallback,
 	}
+}
+
+// NewAmazonCreatorAPIScraperWithRegistry initializes the wrapper over several
+// API-eligible accounts, rotating between them and skipping any whose circuit
+// is open.
+//
+// A registry holding one account collapses to the single-credential path, so
+// callers don't need to special-case it.
+func NewAmazonCreatorAPIScraperWithRegistry(registry *CredentialRegistry, fallback Scraper) *AmazonCreatorAPIScraper {
+	s := &AmazonCreatorAPIScraper{fallback: fallback, registry: registry}
+
+	if registry.Len() == 1 {
+		only := registry.sets[0]
+		s.defaultPartnerTag = only.tag
+		s.tokenManager = only.tokenManager
+	}
+
+	return s
 }
 
 // partnerTagContextKey carries the tag of the account a scrape is being
@@ -296,6 +318,34 @@ func (s *AmazonCreatorAPIScraper) effectivePartnerTag(ctx context.Context) strin
 	return s.defaultPartnerTag
 }
 
+// resolveCredential decides which Associates account this call runs under, and
+// with which OAuth credentials.
+//
+// API eligibility is per account and most pages don't have it, so the tag the
+// post will be published under is usually not one that may call the API. The
+// two are separated here: the returned tag governs the API call and its circuit
+// breaker only, while the published link keeps the account's own tag, applied
+// downstream by utils.AddAffiliateTag from the source URL.
+//
+// With one credential set there is nothing to choose between, so the caller's
+// tag stands as before.
+func (s *AmazonCreatorAPIScraper) resolveCredential(ctx context.Context, marketplace string) (*TokenManager, string) {
+	preferred := s.effectivePartnerTag(ctx)
+
+	if s.registry.Len() <= 1 {
+		return s.tokenManager, preferred
+	}
+
+	set := s.registry.resolve(preferred, marketplace)
+	if set == nil {
+		// Every eligible account is throttled; report the caller's tag so the
+		// fallback reason names something recognisable.
+		return nil, preferred
+	}
+
+	return set.tokenManager, set.tag
+}
+
 // Scrape implements the Scraper interface.
 func (s *AmazonCreatorAPIScraper) Scrape(ctx context.Context, rawURL string) (*models.Product, error) {
 	product, _, err := s.ScrapeWithMeta(ctx, rawURL)
@@ -309,7 +359,7 @@ func (s *AmazonCreatorAPIScraper) ScrapeWithMeta(ctx context.Context, rawURL str
 	// breaker below) can be determined.
 	resolvedURL := utils.ResolveAmazonShortURL(rawURL)
 	marketplace := getMarketplace(resolvedURL)
-	partnerTag := s.effectivePartnerTag(ctx)
+	tokenManager, partnerTag := s.resolveCredential(ctx, marketplace)
 
 	// fellBack runs the HTML scraper and tags the result with why we're here.
 	fellBack := func(reason string) (*models.Product, ScrapeMeta, error) {
@@ -325,7 +375,9 @@ func (s *AmazonCreatorAPIScraper) ScrapeWithMeta(ctx context.Context, rawURL str
 		return fellBack("no partner tag")
 	}
 
-	if creatorAPICircuitOpen(partnerTag, marketplace) {
+	// No token manager means every eligible account is throttled, which only
+	// arises once more than one is configured.
+	if tokenManager == nil || creatorAPICircuitOpen(partnerTag, marketplace) {
 		return fellBack("circuit breaker open")
 	}
 
@@ -337,7 +389,7 @@ func (s *AmazonCreatorAPIScraper) ScrapeWithMeta(ctx context.Context, rawURL str
 	}
 
 	// Fetch from Creators API
-	product, err := s.fetchFromAPI(ctx, asin, marketplace, resolvedURL)
+	product, err := s.fetchFromAPI(ctx, tokenManager, partnerTag, asin, marketplace, resolvedURL)
 	if err != nil {
 		if errors.Is(err, errCreatorsAPIIneligible) {
 			tripCreatorAPICircuit(partnerTag, marketplace, 1*time.Hour)
@@ -366,19 +418,8 @@ func (s *AmazonCreatorAPIScraper) ScrapeWithMeta(ctx context.Context, rawURL str
 	return product, ScrapeMeta{Source: "creators_api"}, nil
 }
 
-func (s *AmazonCreatorAPIScraper) fetchFromAPI(ctx context.Context, asin, marketplace, rawURL string) (*models.Product, error) {
-	// Note: token acquisition failures are intentionally NOT wrapped with
-	// errCreatorsAPINetworkFailure - a token-endpoint hiccup says nothing about
-	// whether the product page itself is reachable, so it should fall through
-	// to the generic "fall back to HTML" branch in Scrape(), not the abort branch.
-	token, err := s.tokenManager.GetToken()
-	if err != nil {
-		return nil, fmt.Errorf("auth token error: %w", err)
-	}
-
-	partnerTag := s.effectivePartnerTag(ctx)
-
-	payloadMap := map[string]interface{}{
+func (s *AmazonCreatorAPIScraper) fetchFromAPI(ctx context.Context, tokenManager *TokenManager, partnerTag, asin, marketplace, rawURL string) (*models.Product, error) {
+	payloadMap := map[string]any{
 		"itemIds":     []string{asin},
 		"itemIdType":  "ASIN",
 		"marketplace": marketplace,
@@ -391,73 +432,9 @@ func (s *AmazonCreatorAPIScraper) fetchFromAPI(ctx context.Context, asin, market
 		},
 	}
 
-	payloadBytes, err := json.Marshal(payloadMap)
+	bodyBytes, err := postCatalog(ctx, tokenManager, "getItems", marketplace, payloadMap)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling API request payload: %w", err)
-	}
-
-	apiURL := "https://creatorsapi.amazon/catalog/v1/getItems"
-
-	var resp *http.Response
-	client := &http.Client{Timeout: 15 * time.Second}
-	maxRetries := 3
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		req, reqErr := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(payloadBytes))
-		if reqErr != nil {
-			return nil, fmt.Errorf("creating API request: %w", reqErr)
-		}
-
-		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("x-marketplace", marketplace)
-
-		resp, err = client.Do(req)
-		if err == nil {
-			// A quota that is already spent is not replenished by asking
-			// again eight seconds later; each retry only deepens the hole and
-			// delays the HTML fallback that would have worked. Give up on the
-			// first 429 and let the caller fall back.
-			if resp.StatusCode == 429 {
-				retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
-				snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-				resp.Body.Close()
-				return nil, &throttleError{
-					retryAfter: retryAfter,
-					detail:     strings.TrimSpace(string(snippet)),
-				}
-			}
-			if resp.StatusCode >= 500 {
-				snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-				resp.Body.Close()
-				err = fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
-			} else {
-				break
-			}
-		}
-
-		log.Printf("[WARN] Creators API GetItems request attempt %d/%d failed: %v", attempt, maxRetries, err)
-		if attempt < maxRetries {
-			time.Sleep(time.Duration(attempt*2) * time.Second)
-		}
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("%w: sending API request after %d attempts: %v", errCreatorsAPINetworkFailure, maxRetries, err)
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading API response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		bodyStr := string(bodyBytes)
-		if strings.Contains(bodyStr, "AssociateNotEligible") {
-			return nil, fmt.Errorf("%w: API request failed (HTTP %d): %s", errCreatorsAPIIneligible, resp.StatusCode, bodyStr)
-		}
-		return nil, fmt.Errorf("API request failed (HTTP %d): %s", resp.StatusCode, bodyStr)
+		return nil, err
 	}
 
 	var apiResp apiGetItemsResponse

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"post-gen/internal/core"
+	"post-gen/internal/deals"
 	"post-gen/internal/events"
 	"post-gen/internal/models"
 	"time"
@@ -41,6 +42,10 @@ type Generator interface {
 	UpdateSchedule(ctx context.Context, schedule models.JobSchedule) (*models.JobSchedule, error)
 	DeleteSchedule(ctx context.Context, id int) error
 	RunSchedule(ctx context.Context, id int) (int, error)
+	Deals(ctx context.Context, filter models.DealFilter) ([]models.Deal, error)
+	Deal(ctx context.Context, asin string) (*models.Deal, error)
+	SetDealStatus(ctx context.Context, asin, status string) (bool, error)
+	DiscoverDeals(ctx context.Context) (*deals.Result, error)
 }
 
 type generateRequest struct {

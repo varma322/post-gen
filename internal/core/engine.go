@@ -49,6 +49,8 @@ type Engine struct {
 	// worker is set by NewWorker when one is started. It stays nil for the
 	// CLI and bot, which have no background publisher.
 	worker *Worker
+	// discovery is built lazily on first use; see discoveryService.
+	discovery discoveryState
 }
 
 // WorkerStatus reports what the background worker is doing. When no worker is

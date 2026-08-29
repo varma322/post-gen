@@ -45,6 +45,19 @@ const (
 	JobStarted   Type = "JOB_STARTED"
 	JobCompleted Type = "JOB_COMPLETED"
 	JobSkipped   Type = "JOB_SKIPPED"
+
+	// One discovery run, across the whole query matrix.
+	DiscoveryStarted Type = "DISCOVERY_STARTED"
+	DiscoverySuccess Type = "DISCOVERY_SUCCESS"
+	DiscoveryFailed  Type = "DISCOVERY_FAILED"
+
+	// Individual deals moving through the pipeline.
+	DealDiscovered Type = "DEAL_DISCOVERED"
+	DealUpdated    Type = "DEAL_UPDATED"
+	DealScored     Type = "DEAL_SCORED"
+	DealQueued     Type = "DEAL_QUEUED"
+	DealPosted     Type = "DEAL_POSTED"
+	DealExpired    Type = "DEAL_EXPIRED"
 )
 
 // Level is the severity band the Activity Log filters on.
@@ -65,6 +78,9 @@ const (
 	SourceFacebook = "facebook"
 	SourceQueue    = "queue"
 	SourceWorker   = "worker"
+	// SourceDiscovery covers deal discovery regardless of which provider
+	// served it; which one did is recorded in the event metadata.
+	SourceDiscovery = "discovery"
 )
 
 // levelFor maps a Type to its severity. Types that report a terminal failure
@@ -72,11 +88,12 @@ const (
 // completed action is a success; everything else is informational.
 func levelFor(t Type) Level {
 	switch t {
-	case ScrapeFailed, AIGenerationFailed, PostFailed:
+	case ScrapeFailed, AIGenerationFailed, PostFailed, DiscoveryFailed:
 		return LevelError
-	case JobSkipped, JobCancelled, ProductRemoved:
+	case JobSkipped, JobCancelled, ProductRemoved, DealExpired:
 		return LevelWarn
-	case ScrapeSuccess, AIGenerationSuccess, PostSuccess, JobCompleted:
+	case ScrapeSuccess, AIGenerationSuccess, PostSuccess, JobCompleted,
+		DiscoverySuccess, DealPosted:
 		return LevelSuccess
 	default:
 		return LevelInfo

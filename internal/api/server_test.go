@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"post-gen/internal/core"
+	"post-gen/internal/deals"
 	"post-gen/internal/models"
 )
 
@@ -25,6 +26,11 @@ type stubGenerator struct {
 	generateFunc func(urls []string, accountNames []string) ([]core.Result, error)
 	storedEvents []models.Event
 	eventsErr    error
+
+	deals          []models.Deal
+	dealsErr       error
+	discoverResult *deals.Result
+	discoverErr    error
 }
 
 func (s stubGenerator) GeneratePosts(ctx context.Context, urls []string, accountNames []string) ([]core.Result, error) {
@@ -141,6 +147,44 @@ func (s stubGenerator) DeleteSchedule(ctx context.Context, id int) error {
 
 func (s stubGenerator) RunSchedule(ctx context.Context, id int) (int, error) {
 	return 1, nil
+}
+
+func (s stubGenerator) Deals(ctx context.Context, filter models.DealFilter) ([]models.Deal, error) {
+	return s.deals, s.dealsErr
+}
+
+func (s stubGenerator) Deal(ctx context.Context, asin string) (*models.Deal, error) {
+	if s.dealsErr != nil {
+		return nil, s.dealsErr
+	}
+	for i := range s.deals {
+		if s.deals[i].ASIN == asin {
+			return &s.deals[i], nil
+		}
+	}
+	return nil, nil
+}
+
+func (s stubGenerator) SetDealStatus(ctx context.Context, asin, status string) (bool, error) {
+	if s.dealsErr != nil {
+		return false, s.dealsErr
+	}
+	for _, deal := range s.deals {
+		if deal.ASIN == asin {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s stubGenerator) DiscoverDeals(ctx context.Context) (*deals.Result, error) {
+	if s.discoverErr != nil {
+		return s.discoverResult, s.discoverErr
+	}
+	if s.discoverResult != nil {
+		return s.discoverResult, nil
+	}
+	return &deals.Result{ByProvider: map[string]int{}}, nil
 }
 
 func (s stubGenerator) WorkerStatus() models.WorkerStatus {

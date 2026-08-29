@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"strings"
 
 	"post-gen/internal/config"
@@ -59,23 +58,8 @@ func GetScraper(rawURL string, allSelectors config.Selectors) (Scraper, error) {
 
 		htmlScraper := NewAmazonScraper(sel)
 
-		// Check for Creators API credentials
-		clientID := os.Getenv("Credential_ID")
-		if clientID == "" {
-			clientID = os.Getenv("AMAZON_CREATOR_CLIENT_ID")
-		}
-		clientSecret := os.Getenv("Secret")
-		if clientSecret == "" {
-			clientSecret = os.Getenv("AMAZON_CREATOR_CLIENT_SECRET")
-		}
-		partnerTag := os.Getenv("AMAZON_CREATOR_PARTNER_TAG")
-		if partnerTag == "" {
-			partnerTag = os.Getenv("Application_ID")
-		}
-		tokenURL := os.Getenv("AMAZON_CREATOR_TOKEN_URL")
-
-		if clientID != "" && clientSecret != "" {
-			return NewAmazonCreatorAPIScraper(clientID, clientSecret, tokenURL, partnerTag, htmlScraper), nil
+		if client := NewCreatorAPIClient(htmlScraper); client != nil {
+			return client, nil
 		}
 
 		return htmlScraper, nil

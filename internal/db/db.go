@@ -294,6 +294,37 @@ func (p *Pool) migrate(ctx context.Context) error {
 	-- which schedule produced them.
 	ALTER TABLE publication_jobs ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';
 	ALTER TABLE publication_jobs ADD COLUMN IF NOT EXISTS schedule_id INT;
+
+	-- Deals discovered by the Creators API searchItems path, or by the Best
+	-- Sellers HTML listing fallback. asin is UNIQUE because discovery upserts
+	-- on it: a deal seen again refreshes its price and last_seen rather than
+	-- being stored twice.
+	CREATE TABLE IF NOT EXISTS deals (
+		id                   SERIAL PRIMARY KEY,
+		asin                 VARCHAR(16) UNIQUE NOT NULL,
+		title                TEXT NOT NULL,
+		url                  TEXT NOT NULL,
+		category             VARCHAR(64),
+		image_url            TEXT,
+		price                NUMERIC(12,2),
+		old_price            NUMERIC(12,2),
+		discount_percent     INT NOT NULL DEFAULT 0,
+		score                INT NOT NULL DEFAULT 0,
+		provider             VARCHAR(32) NOT NULL,
+		status               VARCHAR(32) NOT NULL DEFAULT 'new',
+		first_seen           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		last_seen            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_deals_status_score ON deals(status, score DESC);
+	CREATE INDEX IF NOT EXISTS idx_deals_last_seen ON deals(last_seen);
+
+	DROP TRIGGER IF EXISTS update_deals_updated_at ON deals;
+	CREATE TRIGGER update_deals_updated_at
+		BEFORE UPDATE ON deals
+		FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 	`
 	_, err := p.pool.Exec(ctx, schema)
 	return err
