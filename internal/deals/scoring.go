@@ -3,9 +3,15 @@ package deals
 import (
 	"sort"
 	"strings"
+	"time"
 
 	"post-gen/internal/models"
 )
+
+// DefaultPriceWindow is how far back an observed price is trusted as a
+// reference: long enough to catch the price before a sale started, short enough
+// that a year-old figure does not make a normal price look like a bargain.
+const DefaultPriceWindow = 60 * 24 * time.Hour
 
 // Thresholds for what happens to a scored deal.
 const (
@@ -73,9 +79,29 @@ var categoryScores = map[string]int{
 // on the discovery path without a second lookup per product, and they measure
 // the product rather than the offer.
 func Score(deal models.Deal) int {
-	return discountScore(deal.DiscountPercent) +
-		savingsScore(deal.Savings()) +
-		CategoryScore(deal.Category)
+	return ScoreAgainst(deal, 0)
+}
+
+// ScoreAgainst rates a deal using an observed high price where one is known.
+//
+// observedHigh is the highest price the product was actually seen at, from
+// deal_price_history. When it is available the discount term is measured
+// against it instead of against Amazon's savingBasis, which is a list price
+// and frequently inflated well above anything anyone paid. Pass zero when
+// there is no history and the reported figure stands.
+//
+// This is the one term that can move a deal across the auto-queue threshold on
+// its own, so it is also the one most worth grounding in observed prices.
+func ScoreAgainst(deal models.Deal, observedHigh float64) int {
+	discount := deal.DiscountPercent
+	savings := deal.Savings()
+
+	if trueDiscount, ok := deal.TrueDiscountPercent(observedHigh); ok {
+		discount = trueDiscount
+		savings = observedHigh - deal.Price
+	}
+
+	return discountScore(discount) + savingsScore(savings) + CategoryScore(deal.Category)
 }
 
 // Decide maps a score onto what should happen to the deal.

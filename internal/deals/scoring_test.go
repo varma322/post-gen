@@ -197,3 +197,64 @@ func TestEveryDiscoveryCategoryIsAlsoScored(t *testing.T) {
 		}
 	}
 }
+
+func TestTrueDiscountBeatsAnInflatedListPrice(t *testing.T) {
+	// The headline case: a product that has never sold above ₹1,200 listed
+	// with an MRP of ₹5,000. Amazon reports 80% off; against a price anyone
+	// actually paid it is 17%.
+	inflated := deal(80, 999, 5000, "Books")
+
+	reported := Score(inflated)
+	grounded := ScoreAgainst(inflated, 1200)
+
+	if reported <= grounded {
+		t.Errorf("reported score %d should exceed the grounded one %d", reported, grounded)
+	}
+	if Decide(reported) != DecisionQueue {
+		t.Errorf("test setup: the inflated deal should have queued at %d", reported)
+	}
+	if Decide(grounded) == DecisionQueue {
+		t.Errorf("grounded score %d still queues; the observed high should have stopped it", grounded)
+	}
+}
+
+func TestTrueDiscountRewardsAGenuineDrop(t *testing.T) {
+	// The mirror case: a product seen at ₹4,000 now selling at ₹1,000, but
+	// with no list price to report it against.
+	genuine := deal(0, 1000, 0, "Electronics")
+
+	if got := Score(genuine); got != 25 {
+		t.Fatalf("test setup: unreported discount should score category only, got %d", got)
+	}
+
+	grounded := ScoreAgainst(genuine, 4000)
+	if Decide(grounded) != DecisionQueue {
+		t.Errorf("grounded score %d should queue a real 75%% drop", grounded)
+	}
+}
+
+func TestScoreAgainstFallsBackWithoutHistory(t *testing.T) {
+	// No history must leave the reported figure standing, not score at zero.
+	subject := deal(50, 1000, 2000, "Electronics")
+
+	for _, high := range []float64{0, -1, 500} {
+		if got, want := ScoreAgainst(subject, high), Score(subject); got != want {
+			t.Errorf("ScoreAgainst(high=%v) = %d, want the reported score %d", high, got, want)
+		}
+	}
+}
+
+func TestTrueDiscountPercent(t *testing.T) {
+	subject := models.Deal{Price: 750}
+
+	if pct, ok := subject.TrueDiscountPercent(1000); !ok || pct != 25 {
+		t.Errorf("got %d/%v, want 25/true", pct, ok)
+	}
+	// A high at or below the current price is not a discount.
+	if _, ok := subject.TrueDiscountPercent(750); ok {
+		t.Error("an observed high equal to the price should not report a discount")
+	}
+	if _, ok := subject.TrueDiscountPercent(0); ok {
+		t.Error("no history should not report a discount")
+	}
+}

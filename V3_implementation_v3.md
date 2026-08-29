@@ -573,7 +573,9 @@ Header: last run time, provider split, breaker state (already available from
 14. ~~`GET /analytics/deals` + provider split panel~~ **Done**
 
 ### Sprint 4 — Later
-15. Price history table (defends against inflated MRP, which discount% trusts)
+15. ~~Price history table (defends against inflated MRP, which discount% trusts)~~
+    **Done** — `deal_price_history`, and scoring measures the discount against
+    the highest price a product was actually seen at when history allows.
 16. CTR-based `performanceScore`
 17. Additional API-eligible accounts as they qualify — drop in a CSV, add one
     registry line
@@ -604,9 +606,16 @@ returns an unfiltered keyword search with HTTP 200, so discovery would keep
 running while quietly widening. Node IDs must be validated at startup rather
 than trusted.
 
-**Inflated MRP.** `discountPercent` is computed against `savingBasis`, which is
-Amazon's list price and frequently inflated. Scoring will over-rank fake
-discounts until price history exists (Sprint 4).
+**Inflated MRP — mitigated.** `discountPercent` is computed against
+`savingBasis`, Amazon's list price, which is frequently inflated well above
+anything anyone paid. `deal_price_history` records every price change discovery
+observes, and once a product has more than one observation in the trust window
+the discount is measured against the highest price it was actually seen at
+instead. A single observation is ignored: that is just today's price and says
+nothing about movement.
+
+The defence only builds with time. A product discovered today has no history, so
+its first score still trusts the reported figure.
 
 **Bestseller selectors.** Amazon rotates class names on listing pages more often
 than on product pages. Keeping them in `selectors.json` means a break is a config

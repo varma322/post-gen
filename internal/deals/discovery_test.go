@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"post-gen/internal/models"
 )
@@ -459,5 +460,97 @@ func TestRunNeverAutoIgnores(t *testing.T) {
 
 	if got := store.deals["B0VERYLOW01"].Status; got == models.DealIgnored {
 		t.Error("a low score should not ignore a deal on its own")
+	}
+}
+
+// fakePrices records observations and reports a fixed observed high.
+type fakePrices struct {
+	recorded map[string][]float64
+	highs    map[string]float64
+}
+
+func newFakePrices() *fakePrices {
+	return &fakePrices{recorded: map[string][]float64{}, highs: map[string]float64{}}
+}
+
+func (f *fakePrices) RecordPriceObservation(ctx context.Context, asin string, price float64) (bool, error) {
+	f.recorded[asin] = append(f.recorded[asin], price)
+	return true, nil
+}
+
+func (f *fakePrices) ObservedHighs(ctx context.Context, asins []string, since time.Time) (map[string]float64, error) {
+	found := map[string]float64{}
+	for _, asin := range asins {
+		if high, ok := f.highs[asin]; ok {
+			found[asin] = high
+		}
+	}
+	return found, nil
+}
+
+func TestRunRecordsObservedPrices(t *testing.T) {
+	store := newFakeStore()
+	prices := newFakePrices()
+	provider := &fakeProvider{name: models.DealProviderCreatorAPI, candidates: []models.DealCandidate{
+		candidate("B0PRICED001", 40),
+	}}
+
+	service := NewService(store, nil, []DiscoveryProvider{provider},
+		WithCategories(oneCategory()), WithSavingTiers([]int{30}),
+		WithScorer(Score), WithPriceHistory(prices, DefaultPriceWindow))
+
+	if _, err := service.Run(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := prices.recorded["B0PRICED001"]; len(got) != 1 || got[0] != 1000 {
+		t.Errorf("recorded %v, want the candidate's price once", got)
+	}
+}
+
+func TestRunScoresAgainstTheObservedHigh(t *testing.T) {
+	// An inflated list price should not carry a deal over the threshold once
+	// the product's real trading range is known.
+	store := newFakeStore()
+	prices := newFakePrices()
+	prices.highs["B0INFLATED1"] = 1100
+
+	inflated := candidate("B0INFLATED1", 90)
+	inflated.Price = 1000
+	inflated.OldPrice = 10000
+
+	provider := &fakeProvider{name: models.DealProviderCreatorAPI, candidates: []models.DealCandidate{inflated}}
+
+	service := NewService(store, nil, []DiscoveryProvider{provider},
+		WithCategories(oneCategory()), WithSavingTiers([]int{30}),
+		WithScorer(Score), WithPriceHistory(prices, DefaultPriceWindow))
+
+	if _, err := service.Run(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	stored := store.deals["B0INFLATED1"]
+	if Decide(stored.Score) == DecisionQueue {
+		t.Errorf("score %d still queues; the observed high should have grounded it", stored.Score)
+	}
+	if stored.Status == models.DealApproved {
+		t.Error("an inflated-MRP deal should not be auto-approved once history contradicts it")
+	}
+}
+
+func TestRunWorksWithoutAPriceRecorder(t *testing.T) {
+	store := newFakeStore()
+	provider := &fakeProvider{name: models.DealProviderCreatorAPI, candidates: []models.DealCandidate{
+		candidate("B0NOHIST001", 70),
+	}}
+
+	service := NewService(store, nil, []DiscoveryProvider{provider},
+		WithCategories(oneCategory()), WithSavingTiers([]int{50}), WithScorer(Score))
+
+	if _, err := service.Run(context.Background()); err != nil {
+		t.Fatalf("price history should be optional: %v", err)
+	}
+	if len(store.deals) != 1 {
+		t.Error("expected the deal stored without any price history")
 	}
 }

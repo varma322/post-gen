@@ -470,3 +470,131 @@ func TestUpsertDealPreservesTerminalStatuses(t *testing.T) {
 		}
 	}
 }
+
+func TestRecordPriceObservationOnlyStoresChanges(t *testing.T) {
+	// Discovery sees the same deal several times an hour. A row per sighting
+	// would bury the handful that say something under thousands that repeat.
+	db := testDB(t)
+	ctx := context.Background()
+
+	asin := testASINPrefix + "30"
+	t.Cleanup(func() {
+		_, _ = db.pool.Exec(context.Background(), `DELETE FROM deal_price_history WHERE asin = $1`, asin)
+	})
+
+	recorded, err := db.RecordPriceObservation(ctx, asin, 1000)
+	if err != nil {
+		t.Fatalf("first observation: %v", err)
+	}
+	if !recorded {
+		t.Error("the first observation should be stored")
+	}
+
+	recorded, err = db.RecordPriceObservation(ctx, asin, 1000)
+	if err != nil {
+		t.Fatalf("repeat observation: %v", err)
+	}
+	if recorded {
+		t.Error("an unchanged price should not be stored again")
+	}
+
+	recorded, err = db.RecordPriceObservation(ctx, asin, 750)
+	if err != nil {
+		t.Fatalf("changed observation: %v", err)
+	}
+	if !recorded {
+		t.Error("a changed price should be stored")
+	}
+
+	history, err := db.PriceHistory(ctx, asin, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("got %d points, want the two distinct prices", len(history))
+	}
+	if history[0].Price != 1000 || history[1].Price != 750 {
+		t.Errorf("history = %+v, want oldest first", history)
+	}
+}
+
+func TestRecordPriceObservationIgnoresNonPrices(t *testing.T) {
+	db := testDB(t)
+
+	recorded, err := db.RecordPriceObservation(context.Background(), testASINPrefix+"31", 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if recorded {
+		t.Error("a zero price is not an observation")
+	}
+}
+
+func TestObservedHighsNeedsMoreThanOneObservation(t *testing.T) {
+	// A single observation is just the current price and says nothing about
+	// movement, so it must not become a reference the score is measured from.
+	db := testDB(t)
+	ctx := context.Background()
+
+	lonely := testASINPrefix + "32"
+	moved := testASINPrefix + "33"
+	t.Cleanup(func() {
+		_, _ = db.pool.Exec(context.Background(),
+			`DELETE FROM deal_price_history WHERE asin = ANY($1)`, []string{lonely, moved})
+	})
+
+	if _, err := db.RecordPriceObservation(ctx, lonely, 500); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.RecordPriceObservation(ctx, moved, 2000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.RecordPriceObservation(ctx, moved, 900); err != nil {
+		t.Fatal(err)
+	}
+
+	highs, err := db.ObservedHighs(ctx, []string{lonely, moved}, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("observed highs: %v", err)
+	}
+
+	if _, present := highs[lonely]; present {
+		t.Error("a single observation should not yield an observed high")
+	}
+	if highs[moved] != 2000 {
+		t.Errorf("observed high = %v, want the highest of the two", highs[moved])
+	}
+}
+
+func TestObservedHighsRespectsTheWindow(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	asin := testASINPrefix + "34"
+	t.Cleanup(func() {
+		_, _ = db.pool.Exec(context.Background(), `DELETE FROM deal_price_history WHERE asin = $1`, asin)
+	})
+
+	if _, err := db.RecordPriceObservation(ctx, asin, 5000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.RecordPriceObservation(ctx, asin, 1000); err != nil {
+		t.Fatal(err)
+	}
+
+	// Age the high out of the window; a year-old price should not make today's
+	// normal price look like a bargain.
+	if _, err := db.pool.Exec(ctx,
+		`UPDATE deal_price_history SET observed_at = $1 WHERE asin = $2 AND price = 5000`,
+		time.Now().Add(-365*24*time.Hour), asin); err != nil {
+		t.Fatalf("ageing: %v", err)
+	}
+
+	highs, err := db.ObservedHighs(ctx, []string{asin}, time.Now().Add(-30*24*time.Hour))
+	if err != nil {
+		t.Fatalf("observed highs: %v", err)
+	}
+	if _, present := highs[asin]; present {
+		t.Errorf("highs = %v, want the aged-out price excluded (leaving too few observations)", highs)
+	}
+}

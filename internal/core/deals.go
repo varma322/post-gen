@@ -216,6 +216,7 @@ func (e *Engine) discoveryService() (*deals.Service, error) {
 			// the product-lookup path also draws on.
 			deals.WithQueryDelay(defaultDiscoveryQueryDelay),
 			deals.WithScorer(deals.Score),
+			deals.WithPriceHistory(e.db, deals.DefaultPriceWindow),
 		)
 	})
 

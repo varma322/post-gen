@@ -310,3 +310,103 @@ func (p *Pool) DealCategoryStats(ctx context.Context) ([]models.CategoryDealStat
 
 	return stats, rows.Err()
 }
+
+// RecordPriceObservation appends to a deal's price history, but only when the
+// price actually moved.
+//
+// Discovery sees the same deal several times an hour, and a row per sighting
+// would bury the handful that say something under thousands that repeat the
+// last one. Recording only changes means the history is a list of moves, which
+// is what reading it back needs it to be.
+func (p *Pool) RecordPriceObservation(ctx context.Context, asin string, price float64) (recorded bool, err error) {
+	if price <= 0 {
+		return false, nil
+	}
+
+	// IS DISTINCT FROM does the work of both cases at once: no prior row yields
+	// NULL, which is distinct from any price, so the first observation inserts
+	// and an unchanged one does not. The casts are required because $1 appears
+	// both as an inserted value and in a comparison, which Postgres will not
+	// otherwise type.
+	tag, err := p.pool.Exec(ctx, `
+		INSERT INTO deal_price_history (asin, price)
+		SELECT $1::varchar, $2::numeric
+		WHERE (
+			SELECT price FROM deal_price_history
+			WHERE asin = $1::varchar
+			ORDER BY observed_at DESC
+			LIMIT 1
+		) IS DISTINCT FROM $2::numeric
+	`, asin, price)
+	if err != nil {
+		return false, fmt.Errorf("recording price for %s: %w", asin, err)
+	}
+
+	return tag.RowsAffected() > 0, nil
+}
+
+// PriceHistory returns a deal's observed prices since cutoff, oldest first.
+func (p *Pool) PriceHistory(ctx context.Context, asin string, since time.Time) ([]models.PricePoint, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT price, observed_at
+		FROM deal_price_history
+		WHERE asin = $1 AND observed_at >= $2
+		ORDER BY observed_at ASC
+	`, asin, since)
+	if err != nil {
+		return nil, fmt.Errorf("querying price history for %s: %w", asin, err)
+	}
+	defer rows.Close()
+
+	points := make([]models.PricePoint, 0, 8)
+	for rows.Next() {
+		var point models.PricePoint
+		if err := rows.Scan(&point.Price, &point.ObservedAt); err != nil {
+			return nil, fmt.Errorf("scanning price point: %w", err)
+		}
+		points = append(points, point)
+	}
+
+	return points, rows.Err()
+}
+
+// ObservedHighs returns the highest price observed for each of the given ASINs
+// since cutoff.
+//
+// This is the honest reference price: it is what the product was actually seen
+// selling for, as opposed to savingBasis, which is Amazon's list price and is
+// frequently inflated well above anything anyone ever paid.
+func (p *Pool) ObservedHighs(ctx context.Context, asins []string, since time.Time) (map[string]float64, error) {
+	highs := make(map[string]float64, len(asins))
+	if len(asins) == 0 {
+		return highs, nil
+	}
+
+	rows, err := p.pool.Query(ctx, `
+		SELECT asin, MAX(price), COUNT(*)
+		FROM deal_price_history
+		WHERE asin = ANY($1) AND observed_at >= $2
+		GROUP BY asin
+	`, asins, since)
+	if err != nil {
+		return nil, fmt.Errorf("querying observed highs: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			asin        string
+			high        float64
+			observations int
+		)
+		if err := rows.Scan(&asin, &high, &observations); err != nil {
+			return nil, fmt.Errorf("scanning observed high: %w", err)
+		}
+		// One observation is the current price and says nothing about movement.
+		if observations > 1 {
+			highs[asin] = high
+		}
+	}
+
+	return highs, rows.Err()
+}

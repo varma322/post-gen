@@ -174,3 +174,26 @@ type CategoryDealStats struct {
 	AverageScore float64 `json:"average_score"`
 	Queued       int     `json:"queued"`
 }
+
+// PricePoint is one observed price for a deal.
+type PricePoint struct {
+	Price      float64   `json:"price"`
+	ObservedAt time.Time `json:"observed_at"`
+}
+
+// TrueDiscountPercent is the discount measured against a price the product was
+// actually seen at, rather than against Amazon's list price.
+//
+// savingBasis - what discount_percent is computed from - is frequently inflated
+// well above anything anyone ever paid, which is why a headline "80% off" so
+// often is not. observedHigh comes from deal_price_history and is by definition
+// a price the product really carried.
+//
+// It returns false when there is no usable history, so the caller can fall back
+// to the reported figure rather than silently scoring a deal at zero.
+func (d Deal) TrueDiscountPercent(observedHigh float64) (int, bool) {
+	if observedHigh <= 0 || d.Price <= 0 || observedHigh <= d.Price {
+		return 0, false
+	}
+	return int((observedHigh - d.Price) / observedHigh * 100), true
+}

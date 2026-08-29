@@ -325,6 +325,19 @@ func (p *Pool) migrate(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_deals_status_score ON deals(status, score DESC);
 	CREATE INDEX IF NOT EXISTS idx_deals_last_seen ON deals(last_seen);
 
+	-- One row per observed price change, not per sighting: discovery sees the
+	-- same deal several times an hour and storing every look would bury the
+	-- handful of rows that actually say something.
+	CREATE TABLE IF NOT EXISTS deal_price_history (
+		id                   SERIAL PRIMARY KEY,
+		asin                 VARCHAR(16) NOT NULL,
+		price                NUMERIC(12,2) NOT NULL,
+		observed_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_deal_price_history_asin
+		ON deal_price_history(asin, observed_at DESC);
+
 	DROP TRIGGER IF EXISTS update_deals_updated_at ON deals;
 	CREATE TRIGGER update_deals_updated_at
 		BEFORE UPDATE ON deals

@@ -27,6 +27,14 @@ type Store interface {
 	UpsertDeal(ctx context.Context, deal models.Deal) (bool, error)
 }
 
+// PriceRecorder keeps a deal's observed prices, so scoring can measure a
+// discount against a price the product really carried rather than against
+// Amazon's list price. Optional: discovery works without one.
+type PriceRecorder interface {
+	RecordPriceObservation(ctx context.Context, asin string, price float64) (bool, error)
+	ObservedHighs(ctx context.Context, asins []string, since time.Time) (map[string]float64, error)
+}
+
 // Scorer rates a deal so the queue decision can be made without a second pass.
 // Discovery works without one, storing a score of zero.
 type Scorer func(models.Deal) int
@@ -42,6 +50,9 @@ type Service struct {
 	tiers       []int
 	marketplace string
 	scorer      Scorer
+	prices      PriceRecorder
+	// priceWindow is how far back observed prices are trusted as a reference.
+	priceWindow time.Duration
 
 	// pause between queries, to pace a run against the API's rate limit.
 	queryDelay time.Duration
@@ -71,6 +82,20 @@ func WithScorer(scorer Scorer) Option {
 	return func(s *Service) { s.scorer = scorer }
 }
 
+// WithPriceHistory records observed prices and scores against them.
+//
+// window is how far back a price is trusted as a reference: long enough to
+// catch a pre-sale price, short enough that a year-old figure does not make a
+// normal price look like a bargain.
+func WithPriceHistory(recorder PriceRecorder, window time.Duration) Option {
+	return func(s *Service) {
+		s.prices = recorder
+		if window > 0 {
+			s.priceWindow = window
+		}
+	}
+}
+
 // WithQueryDelay paces the run. Zero runs queries back to back.
 func WithQueryDelay(delay time.Duration) Option {
 	return func(s *Service) { s.queryDelay = delay }
@@ -86,6 +111,7 @@ func NewService(store Store, eventLog *events.Logger, providers []DiscoveryProvi
 		categories:  VerifiedCategories,
 		tiers:       DefaultSavingTiers,
 		marketplace: "www.amazon.in",
+		priceWindow: DefaultPriceWindow,
 	}
 
 	for _, opt := range opts {
@@ -270,8 +296,18 @@ func (s *Service) discoverOne(ctx context.Context, query models.DealQuery) ([]mo
 // QueueApprovedDeals carries it out at its own pace.
 func (s *Service) storeCandidate(ctx context.Context, candidate models.DealCandidate, traceID string) (bool, error) {
 	deal := candidate.Deal()
+
+	// Record the price before scoring, so a deal seen for the first time still
+	// contributes the observation that will ground its next score.
+	observedHigh := s.observePrice(ctx, deal)
+
 	if s.scorer != nil {
 		deal.Score = s.scorer(deal)
+		// A scorer that can use observed prices supersedes the plain one. The
+		// injected Scorer stays for callers that supply their own.
+		if observedHigh > 0 {
+			deal.Score = ScoreAgainst(deal, observedHigh)
+		}
 		if Decide(deal.Score) == DecisionQueue {
 			deal.Status = models.DealApproved
 		}
@@ -302,6 +338,27 @@ func (s *Service) storeCandidate(ctx context.Context, candidate models.DealCandi
 	})
 
 	return created, nil
+}
+
+// observePrice records the current price and returns the highest price seen in
+// the trust window, or zero when there is no usable history.
+func (s *Service) observePrice(ctx context.Context, deal models.Deal) float64 {
+	if s.prices == nil || deal.Price <= 0 {
+		return 0
+	}
+
+	if _, err := s.prices.RecordPriceObservation(ctx, deal.ASIN, deal.Price); err != nil {
+		// Losing one observation costs a little accuracy later, not this run.
+		log.Printf("[WARN] Discovery: could not record price for %s: %v", deal.ASIN, err)
+	}
+
+	highs, err := s.prices.ObservedHighs(ctx, []string{deal.ASIN}, time.Now().Add(-s.priceWindow))
+	if err != nil {
+		log.Printf("[WARN] Discovery: could not read price history for %s: %v", deal.ASIN, err)
+		return 0
+	}
+
+	return highs[deal.ASIN]
 }
 
 // emit sends an event, defaulting the source to discovery.
