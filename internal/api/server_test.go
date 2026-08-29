@@ -217,6 +217,13 @@ func (s stubGenerator) DealAnalytics(ctx context.Context) (*models.DealAnalytics
 	}, nil
 }
 
+func (s stubGenerator) RescoreDeals(ctx context.Context) (int, error) {
+	if s.dealsErr != nil {
+		return 0, s.dealsErr
+	}
+	return len(s.deals), nil
+}
+
 func (s stubGenerator) WorkerStatus() models.WorkerStatus {
 	return models.WorkerStatus{Running: true, Phase: "idle"}
 }

@@ -48,6 +48,7 @@ type Generator interface {
 	QueueDeal(ctx context.Context, asin string) (*models.Deal, error)
 	DiscoverDeals(ctx context.Context) (*deals.Result, error)
 	DealAnalytics(ctx context.Context) (*models.DealAnalytics, error)
+	RescoreDeals(ctx context.Context) (int, error)
 }
 
 type generateRequest struct {

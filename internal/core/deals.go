@@ -287,3 +287,70 @@ func (e *Engine) DealAnalytics(ctx context.Context) (*models.DealAnalytics, erro
 		TopCategories: categories,
 	}, nil
 }
+
+// RescoreDeals recomputes every undecided deal's score from data already on
+// its row, and moves it between new and approved to match.
+//
+// Scoring reads only fields the deal already carries, so this costs no API
+// calls and is the right response to a scoring change - new weights, new
+// thresholds - which would otherwise leave the stored catalog ranked by the
+// old rules until each deal happened to be rediscovered.
+//
+// Deals that are ignored, queued or posted are left alone: their fate is
+// already decided, and a rescore is not grounds to revisit it.
+func (e *Engine) RescoreDeals(ctx context.Context) (int, error) {
+	if e.db == nil {
+		return 0, ErrDealsUnavailable
+	}
+
+	undecided := make([]models.Deal, 0, 128)
+	for _, status := range []string{models.DealNew, models.DealApproved} {
+		batch, err := e.db.ListDeals(ctx, models.DealFilter{Status: status})
+		if err != nil {
+			return 0, err
+		}
+		undecided = append(undecided, batch...)
+	}
+
+	if len(undecided) == 0 {
+		return 0, nil
+	}
+
+	// One batched lookup rather than one per deal: the observed high is what
+	// keeps an inflated list price from carrying a deal over the threshold.
+	asins := make([]string, 0, len(undecided))
+	for _, deal := range undecided {
+		asins = append(asins, deal.ASIN)
+	}
+	highs, err := e.db.ObservedHighs(ctx, asins, time.Now().Add(-deals.DefaultPriceWindow))
+	if err != nil {
+		log.Printf("[WARN] Rescore: could not read price history, scoring on reported prices: %v", err)
+		highs = map[string]float64{}
+	}
+
+	changed := 0
+	for _, deal := range undecided {
+		score := deals.ScoreAgainst(deal, highs[deal.ASIN])
+
+		status := models.DealNew
+		if deals.Decide(score) == deals.DecisionQueue {
+			status = models.DealApproved
+		}
+
+		if score == deal.Score && status == deal.Status {
+			continue
+		}
+
+		updated, err := e.db.ApplyDealScore(ctx, deal.ASIN, score, status)
+		if err != nil {
+			log.Printf("[WARN] Rescore: could not update %s: %v", deal.ASIN, err)
+			continue
+		}
+		if updated {
+			changed++
+		}
+	}
+
+	log.Printf("[INFO] Rescored %d deals, %d changed", len(undecided), changed)
+	return changed, nil
+}

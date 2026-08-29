@@ -410,3 +410,25 @@ func (p *Pool) ObservedHighs(ctx context.Context, asins []string, since time.Tim
 
 	return highs, rows.Err()
 }
+
+// ApplyDealScore writes a recomputed score and the status it implies in one
+// statement, leaving deals whose fate is already decided alone.
+//
+// ignored, queued and posted are excluded for the same reason the upsert
+// preserves them: a rescore is not grounds to revive a rejected deal or to
+// rewrite the record of one that already reached a page.
+func (p *Pool) ApplyDealScore(ctx context.Context, asin string, score int, status string) (bool, error) {
+	if !models.ValidDealStatus(status) {
+		return false, fmt.Errorf("unknown deal status %q", status)
+	}
+
+	tag, err := p.pool.Exec(ctx, `
+		UPDATE deals SET score = $1, status = $2
+		WHERE asin = $3 AND status IN ($4, $5)
+	`, score, status, asin, models.DealNew, models.DealApproved)
+	if err != nil {
+		return false, fmt.Errorf("applying score to %s: %w", asin, err)
+	}
+
+	return tag.RowsAffected() > 0, nil
+}

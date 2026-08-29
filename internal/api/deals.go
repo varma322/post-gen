@@ -55,6 +55,11 @@ func (s server) handleDealByASIN(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if rest == "rescore" {
+		s.handleDealsRescore(w, r)
+		return
+	}
+
 	asinPart, action, _ := strings.Cut(rest, "/")
 	asin := strings.ToUpper(strings.TrimSpace(asinPart))
 	if asin == "" {
@@ -153,6 +158,26 @@ func (s server) handleDealsDiscover(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, result)
+}
+
+// handleDealsRescore recomputes stored scores at /deals/rescore.
+//
+// It reads only what the deals already carry, so it costs no API calls and is
+// the right response to a scoring change rather than waiting for each deal to
+// be rediscovered under the new rules.
+func (s server) handleDealsRescore(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, http.MethodPost)
+		return
+	}
+
+	changed, err := s.engine.RescoreDeals(r.Context())
+	if err != nil {
+		writeDealError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]int{"changed": changed})
 }
 
 // handleAnalyticsDeals serves the deal catalog summary at /analytics/deals.

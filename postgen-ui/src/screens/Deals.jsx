@@ -43,6 +43,7 @@ export default function Deals({ apiFetch }) {
   const [lastRun, setLastRun] = useState(null);
   const [busyAsin, setBusyAsin] = useState('');
   const [analytics, setAnalytics] = useState(null);
+  const [rescoring, setRescoring] = useState(false);
   const [page, setPage] = useState(0);
 
   const [status, setStatus] = useState('');
@@ -98,6 +99,21 @@ export default function Deals({ apiFetch }) {
     }
   };
 
+  const rescore = async () => {
+    setRescoring(true);
+    setError('');
+    try {
+      const resp = await apiFetch('/deals/rescore', { method: 'POST' });
+      const body = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(body.error || 'Rescore failed');
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRescoring(false);
+    }
+  };
+
   const act = async (asin, action) => {
     setBusyAsin(asin);
     setError('');
@@ -140,9 +156,14 @@ export default function Deals({ apiFetch }) {
         <p className="text-body-md text-on-surface-variant">
           Discounted products found on Amazon, scored before they reach the queue.
         </p>
-        <Button variant="primary" icon="travel_explore" onClick={runDiscovery} disabled={discovering}>
-          {discovering ? 'Discovering…' : 'Run discovery'}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button icon="calculate" onClick={rescore} disabled={rescoring}>
+            {rescoring ? 'Rescoring…' : 'Rescore'}
+          </Button>
+          <Button variant="primary" icon="travel_explore" onClick={runDiscovery} disabled={discovering}>
+            {discovering ? 'Discovering…' : 'Run discovery'}
+          </Button>
+        </div>
       </div>
 
       {error && <ErrorNotice message={error} onRetry={load} />}

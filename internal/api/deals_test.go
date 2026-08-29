@@ -333,3 +333,35 @@ func TestHandleAnalyticsDealsReportsUnavailableStorageAs503(t *testing.T) {
 		t.Errorf("status = %d, want 503", resp.Code)
 	}
 }
+
+func TestHandleDealsRescore(t *testing.T) {
+	resp := do(t, stubGenerator{deals: sampleDeals()}, http.MethodPost, "/deals/rescore")
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.Code)
+	}
+
+	var payload map[string]int
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	if payload["changed"] != 2 {
+		t.Errorf("changed = %d, want 2", payload["changed"])
+	}
+}
+
+func TestHandleDealsRescoreRequiresPOST(t *testing.T) {
+	resp := do(t, stubGenerator{}, http.MethodGet, "/deals/rescore")
+	if resp.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", resp.Code)
+	}
+}
+
+func TestRescoreIsNotTreatedAsAnASIN(t *testing.T) {
+	// "rescore" shares the /deals/ prefix with every ASIN route, so it has to
+	// be matched before the path is read as an identifier.
+	resp := do(t, stubGenerator{deals: sampleDeals()}, http.MethodPost, "/deals/rescore")
+	if resp.Code == http.StatusNotFound {
+		t.Error("rescore was parsed as an unknown ASIN")
+	}
+}

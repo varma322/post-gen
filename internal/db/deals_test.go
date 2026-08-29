@@ -598,3 +598,60 @@ func TestObservedHighsRespectsTheWindow(t *testing.T) {
 		t.Errorf("highs = %v, want the aged-out price excluded (leaving too few observations)", highs)
 	}
 }
+
+func TestApplyDealScoreLeavesDecidedDealsAlone(t *testing.T) {
+	// A rescore is not grounds to revive a rejected deal or to rewrite the
+	// record of one that already reached a page.
+	db := testDB(t)
+	ctx := context.Background()
+
+	for i, decided := range []string{models.DealIgnored, models.DealQueued, models.DealPosted} {
+		asin := testASINPrefix + "4" + string(rune('0'+i))
+		cleanupDeals(t, db, asin)
+
+		if _, err := db.UpsertDeal(ctx, sampleDeal(asin)); err != nil {
+			t.Fatalf("upsert: %v", err)
+		}
+		if _, err := db.SetDealStatus(ctx, asin, decided); err != nil {
+			t.Fatalf("setting %s: %v", decided, err)
+		}
+
+		updated, err := db.ApplyDealScore(ctx, asin, 125, models.DealApproved)
+		if err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+		if updated {
+			t.Errorf("a %s deal should not be rescored", decided)
+		}
+
+		after, _ := db.GetDeal(ctx, asin)
+		if after.Status != decided {
+			t.Errorf("status = %q, want %q untouched", after.Status, decided)
+		}
+	}
+}
+
+func TestApplyDealScoreUpdatesUndecidedDeals(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	asin := testASINPrefix + "45"
+	cleanupDeals(t, db, asin)
+
+	if _, err := db.UpsertDeal(ctx, sampleDeal(asin)); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	updated, err := db.ApplyDealScore(ctx, asin, 118, models.DealApproved)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if !updated {
+		t.Fatal("expected a new deal to be rescored")
+	}
+
+	after, _ := db.GetDeal(ctx, asin)
+	if after.Score != 118 || after.Status != models.DealApproved {
+		t.Errorf("got score=%d status=%q, want 118/approved", after.Score, after.Status)
+	}
+}
