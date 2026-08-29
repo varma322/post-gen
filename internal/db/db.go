@@ -290,6 +290,10 @@ func (p *Pool) migrate(ctx context.Context) error {
 		BEFORE UPDATE ON job_schedules
 		FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+	-- A schedule's kind says when it fires; task says what it does. Existing
+	-- rows all predate discovery, so they default to the auto-post pipeline.
+	ALTER TABLE job_schedules ADD COLUMN IF NOT EXISTS task VARCHAR(32) NOT NULL DEFAULT 'auto_post';
+
 	-- Jobs gain a name so a run is identifiable in the scheduler, and record
 	-- which schedule produced them.
 	ALTER TABLE publication_jobs ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT '';

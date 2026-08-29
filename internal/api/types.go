@@ -47,6 +47,7 @@ type Generator interface {
 	SetDealStatus(ctx context.Context, asin, status string) (bool, error)
 	QueueDeal(ctx context.Context, asin string) (*models.Deal, error)
 	DiscoverDeals(ctx context.Context) (*deals.Result, error)
+	DealAnalytics(ctx context.Context) (*models.DealAnalytics, error)
 }
 
 type generateRequest struct {

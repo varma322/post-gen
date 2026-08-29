@@ -11,7 +11,7 @@ import (
 	"post-gen/internal/models"
 )
 
-const scheduleColumns = `id, name, kind, interval_minutes, daily_at, rotate_old_links,
+const scheduleColumns = `id, name, kind, task, interval_minutes, daily_at, rotate_old_links,
 	enabled, next_run_at, last_run_at, last_job_id, last_error, created_at`
 
 // ListSchedules returns every configured schedule, newest first.
@@ -53,10 +53,10 @@ func (p *Pool) CreateSchedule(ctx context.Context, schedule models.JobSchedule) 
 
 	var id int
 	err := p.pool.QueryRow(ctx, `
-		INSERT INTO job_schedules (name, kind, interval_minutes, daily_at, rotate_old_links, enabled, next_run_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO job_schedules (name, kind, task, interval_minutes, daily_at, rotate_old_links, enabled, next_run_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id
-	`, schedule.Name, schedule.Kind, schedule.IntervalMinutes, schedule.DailyAt,
+	`, schedule.Name, schedule.Kind, schedule.EffectiveTask(), schedule.IntervalMinutes, schedule.DailyAt,
 		schedule.RotateOldLinks, schedule.Enabled, nextRun).Scan(&id)
 	if err != nil {
 		return nil, fmt.Errorf("creating schedule: %w", err)
@@ -82,10 +82,10 @@ func (p *Pool) UpdateSchedule(ctx context.Context, schedule models.JobSchedule) 
 
 	_, err = p.pool.Exec(ctx, `
 		UPDATE job_schedules
-		SET name = $1, kind = $2, interval_minutes = $3, daily_at = $4,
-		    rotate_old_links = $5, enabled = $6, next_run_at = $7
-		WHERE id = $8
-	`, schedule.Name, schedule.Kind, schedule.IntervalMinutes, schedule.DailyAt,
+		SET name = $1, kind = $2, task = $3, interval_minutes = $4, daily_at = $5,
+		    rotate_old_links = $6, enabled = $7, next_run_at = $8
+		WHERE id = $9
+	`, schedule.Name, schedule.Kind, schedule.EffectiveTask(), schedule.IntervalMinutes, schedule.DailyAt,
 		schedule.RotateOldLinks, schedule.Enabled, nextRun, schedule.ID)
 	if err != nil {
 		return nil, fmt.Errorf("updating schedule: %w", err)
@@ -159,7 +159,7 @@ func scanSchedule(row rowScanner) (models.JobSchedule, error) {
 	)
 
 	err := row.Scan(
-		&schedule.ID, &schedule.Name, &schedule.Kind, &schedule.IntervalMinutes,
+		&schedule.ID, &schedule.Name, &schedule.Kind, &schedule.Task, &schedule.IntervalMinutes,
 		&schedule.DailyAt, &schedule.RotateOldLinks, &schedule.Enabled,
 		&schedule.NextRunAt, &schedule.LastRunAt, &schedule.LastJobID,
 		&lastError, &schedule.CreatedAt,

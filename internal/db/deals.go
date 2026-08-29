@@ -281,3 +281,32 @@ func scanDeal(row rowScanner) (models.Deal, error) {
 
 	return deal, nil
 }
+
+// DealCategoryStats returns per-category counts and average scores, richest
+// first, for the analytics panel.
+func (p *Pool) DealCategoryStats(ctx context.Context) ([]models.CategoryDealStats, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT COALESCE(category, 'Uncategorised'),
+		       COUNT(*),
+		       COALESCE(AVG(score), 0),
+		       COUNT(*) FILTER (WHERE status IN ($1, $2))
+		FROM deals
+		GROUP BY 1
+		ORDER BY 2 DESC
+	`, models.DealQueued, models.DealPosted)
+	if err != nil {
+		return nil, fmt.Errorf("querying deal category stats: %w", err)
+	}
+	defer rows.Close()
+
+	stats := make([]models.CategoryDealStats, 0, 8)
+	for rows.Next() {
+		var row models.CategoryDealStats
+		if err := rows.Scan(&row.Category, &row.Deals, &row.AverageScore, &row.Queued); err != nil {
+			return nil, fmt.Errorf("scanning category stats: %w", err)
+		}
+		stats = append(stats, row)
+	}
+
+	return stats, rows.Err()
+}

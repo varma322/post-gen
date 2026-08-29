@@ -155,6 +155,22 @@ func (s server) handleDealsDiscover(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// handleAnalyticsDeals serves the deal catalog summary at /analytics/deals.
+func (s server) handleAnalyticsDeals(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+
+	analytics, err := s.engine.DealAnalytics(r.Context())
+	if err != nil {
+		writeDealError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, analytics)
+}
+
 // dealFilterFromQuery reads the listing filters off the query string.
 func dealFilterFromQuery(r *http.Request) (models.DealFilter, error) {
 	query := r.URL.Query()

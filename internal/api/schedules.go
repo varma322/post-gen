@@ -115,5 +115,6 @@ func decodeSchedule(w http.ResponseWriter, r *http.Request) (models.JobSchedule,
 
 	schedule.Name = strings.TrimSpace(schedule.Name)
 	schedule.DailyAt = strings.TrimSpace(schedule.DailyAt)
+	schedule.Task = strings.TrimSpace(schedule.Task)
 	return schedule, true
 }

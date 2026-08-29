@@ -42,6 +42,7 @@ export default function Deals({ apiFetch }) {
   const [discovering, setDiscovering] = useState(false);
   const [lastRun, setLastRun] = useState(null);
   const [busyAsin, setBusyAsin] = useState('');
+  const [analytics, setAnalytics] = useState(null);
   const [page, setPage] = useState(0);
 
   const [status, setStatus] = useState('');
@@ -59,12 +60,18 @@ export default function Deals({ apiFetch }) {
       if (minScore) params.set('min_score', minScore);
       params.set('limit', '500');
 
-      const resp = await apiFetch(`/deals?${params}`);
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}));
+      const [dealsResp, analyticsResp] = await Promise.all([
+        apiFetch(`/deals?${params}`),
+        apiFetch('/analytics/deals'),
+      ]);
+      if (!dealsResp.ok) {
+        const body = await dealsResp.json().catch(() => ({}));
         throw new Error(body.error || 'Failed to load deals');
       }
-      setDeals((await resp.json()).deals || []);
+      setDeals((await dealsResp.json()).deals || []);
+      // Catalog-wide counts, so the tiles stay true as the table outgrows one
+      // page of results.
+      if (analyticsResp.ok) setAnalytics(await analyticsResp.json());
     } catch (err) {
       setError(err.message);
     } finally {
@@ -115,14 +122,14 @@ export default function Deals({ apiFetch }) {
       deal.title?.toLowerCase().includes(needle) || deal.asin?.toLowerCase().includes(needle));
   }, [deals, search]);
 
-  const totals = useMemo(() => {
-    const counts = { approved: 0, queued: 0, creator_api: 0, scraper: 0 };
-    for (const deal of deals) {
-      if (deal.status in counts) counts[deal.status] += 1;
-      if (deal.provider in counts) counts[deal.provider] += 1;
-    }
-    return counts;
-  }, [deals]);
+  const totals = useMemo(() => ({
+    total: analytics?.total ?? deals.length,
+    approved: analytics?.by_status?.approved ?? 0,
+    queued: analytics?.by_status?.queued ?? 0,
+    creator_api: analytics?.by_provider?.creator_api ?? 0,
+    scraper: analytics?.by_provider?.scraper ?? 0,
+    apiShare: analytics?.provider_share?.creator_api,
+  }), [analytics, deals.length]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const visible = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -164,13 +171,45 @@ export default function Deals({ apiFetch }) {
       )}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard label="Deals stored" value={deals.length} icon="local_offer" />
+        <KpiCard label="Deals stored" value={totals.total} icon="local_offer" />
         <KpiCard label="Approved" value={totals.approved} icon="task_alt"
                  hint={`Score ${AUTO_QUEUE_SCORE}+ queues automatically`} />
         <KpiCard label="Queued" value={totals.queued} icon="playlist_add_check" />
         <KpiCard label="From Creators API" value={totals.creator_api} icon="api"
-                 hint={totals.scraper ? `${totals.scraper} from the scraper` : 'No scraper fallback used'} />
+                 hint={totals.apiShare != null
+                   ? `${totals.apiShare}% of the catalog · ${totals.scraper} from the scraper`
+                   : 'No scraper fallback used'} />
       </div>
+
+      {analytics?.top_categories?.length > 1 && (
+        <Card padded={false}>
+          <CardHeader title="By category" icon="category" />
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[28rem] text-body-sm">
+              <thead className="border-b border-outline-variant text-label-md text-on-surface-variant">
+                <tr>
+                  <th className="px-4 py-2 text-left font-medium">Category</th>
+                  <th className="px-3 py-2 text-right font-medium">Deals</th>
+                  <th className="px-3 py-2 text-right font-medium">Avg score</th>
+                  <th className="px-4 py-2 text-right font-medium">Reached the queue</th>
+                </tr>
+              </thead>
+              <tbody>
+                {analytics.top_categories.map((row) => (
+                  <tr key={row.category} className="border-b border-outline-variant/60 last:border-0">
+                    <td className="px-4 py-2">{row.category}</td>
+                    <td className="px-3 py-2 text-right tabular">{formatNumber(row.deals)}</td>
+                    <td className={`px-3 py-2 text-right tabular ${scoreTone(row.average_score)}`}>
+                      {row.average_score.toFixed(1)}
+                    </td>
+                    <td className="px-4 py-2 text-right tabular">{formatNumber(row.queued)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
       <Card padded={false}>
         <CardHeader

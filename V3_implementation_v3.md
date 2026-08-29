@@ -566,9 +566,11 @@ Header: last run time, provider split, breaker state (already available from
 11. `POST /deals/{asin}/queue`, `/ignore`
 
 ### Sprint 3 — Automation
-12. `job_schedules.task` column + `fireSchedule` branch
-13. Best Sellers HTML lister + `amazon_listings` selectors
-14. `GET /analytics/deals` + provider split panel
+12. ~~`job_schedules.task` column + `fireSchedule` branch~~ **Done** — task is a
+    second axis beside kind, so discovery runs on either cadence.
+13. ~~Best Sellers HTML lister + `amazon_listings` selectors~~ **Done** —
+    verified live: 8 tiles parsed from the real page. See the pre-filter note.
+14. ~~`GET /analytics/deals` + provider split panel~~ **Done**
 
 ### Sprint 4 — Later
 15. Price history table (defends against inflated MRP, which discount% trusts)

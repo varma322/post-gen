@@ -140,3 +140,48 @@ func TestDescribe(t *testing.T) {
 		}
 	}
 }
+
+func TestEffectiveTaskDefaultsToAutoPost(t *testing.T) {
+	// Rows and payloads that predate the field must keep working unchanged.
+	for _, task := range []string{"", "   "} {
+		schedule := JobSchedule{Name: "x", Kind: ScheduleInterval, IntervalMinutes: 30, Task: task}
+		if got := schedule.EffectiveTask(); got != TaskAutoPost {
+			t.Errorf("EffectiveTask(%q) = %q, want %q", task, got, TaskAutoPost)
+		}
+	}
+}
+
+func TestValidateAcceptsBothTasks(t *testing.T) {
+	for _, task := range []string{"", TaskAutoPost, TaskDealDiscovery} {
+		schedule := JobSchedule{Name: "x", Kind: ScheduleInterval, IntervalMinutes: 30, Task: task}
+		if err := schedule.Validate(); err != nil {
+			t.Errorf("task %q should validate: %v", task, err)
+		}
+	}
+}
+
+func TestValidateRejectsAnUnknownTask(t *testing.T) {
+	schedule := JobSchedule{Name: "x", Kind: ScheduleInterval, IntervalMinutes: 30, Task: "send_telegram"}
+
+	err := schedule.Validate()
+	if err == nil {
+		t.Fatal("expected an unknown task to be rejected")
+	}
+	if !strings.Contains(err.Error(), "send_telegram") {
+		t.Errorf("error %q should name the bad task", err)
+	}
+}
+
+func TestTaskAndKindAreIndependent(t *testing.T) {
+	// Discovery must be schedulable on either cadence; conflating the two axes
+	// is what the task column exists to avoid.
+	daily := JobSchedule{Name: "x", Kind: ScheduleDaily, DailyAt: "09:00", Task: TaskDealDiscovery}
+	if err := daily.Validate(); err != nil {
+		t.Errorf("a daily discovery schedule should validate: %v", err)
+	}
+
+	interval := JobSchedule{Name: "x", Kind: ScheduleInterval, IntervalMinutes: 30, Task: TaskDealDiscovery}
+	if err := interval.Validate(); err != nil {
+		t.Errorf("an interval discovery schedule should validate: %v", err)
+	}
+}

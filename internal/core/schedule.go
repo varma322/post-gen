@@ -102,6 +102,14 @@ func (e *Engine) fireSchedule(ctx context.Context, schedule models.JobSchedule) 
 	armed.LastRunAt = &ranAt
 	next := armed.NextRun(ranAt)
 
+	// Kind decided that this schedule is due; task decides what it now does.
+	// Discovery produces no publication job, so it records a run without a job
+	// id and shares everything else - next-window arming, error capture, the
+	// operator-facing event.
+	if schedule.EffectiveTask() == models.TaskDealDiscovery {
+		return 0, e.fireDiscoverySchedule(ctx, schedule, ranAt, next)
+	}
+
 	jobID, triggerErr := e.TriggerAutoPostJob(ctx, schedule.RotateOldLinks)
 
 	var (
@@ -139,4 +147,49 @@ func (e *Engine) fireSchedule(ctx context.Context, schedule models.JobSchedule) 
 
 	log.Printf("[INFO] Schedule %q started job %d; next run %s", schedule.Name, jobID, next.Format(time.RFC3339))
 	return jobID, nil
+}
+
+// fireDiscoverySchedule runs one discovery pass on behalf of a schedule, then
+// queues whatever scoring approved.
+//
+// Discovery creates no publication job, so the run is recorded with no job id.
+// The queueing pass afterwards is bounded and best-effort: finding deals is the
+// point of the schedule, and a product that will not scrape should not make the
+// whole run look failed.
+func (e *Engine) fireDiscoverySchedule(ctx context.Context, schedule models.JobSchedule, ranAt, next time.Time) error {
+	result, runErr := e.DiscoverDeals(ctx)
+
+	var errText string
+	if runErr != nil {
+		errText = runErr.Error()
+	}
+
+	if err := e.db.RecordScheduleRun(ctx, schedule.ID, ranAt, next, nil, errText); err != nil {
+		log.Printf("[ERR] Could not record run for schedule %q: %v", schedule.Name, err)
+	}
+
+	if runErr != nil {
+		e.events.Emit(events.Event{
+			Type:    events.JobSkipped,
+			Source:  events.SourceDiscovery,
+			TraceID: events.NewTraceID(),
+			Message: fmt.Sprintf("Discovery schedule %q failed: %v", schedule.Name, runErr),
+			Metadata: map[string]any{
+				"schedule_id":   schedule.ID,
+				"schedule_name": schedule.Name,
+				"reason":        "discovery_failed",
+			},
+		})
+		return runErr
+	}
+
+	queued, queueErr := e.QueueApprovedDeals(ctx, 0)
+	if queueErr != nil {
+		log.Printf("[WARN] Schedule %q discovered deals but could not queue them: %v", schedule.Name, queueErr)
+	}
+
+	log.Printf("[INFO] Schedule %q discovered %d new and %d updated deals, queued %d; next run %s",
+		schedule.Name, result.New, result.Updated, len(queued), next.Format(time.RFC3339))
+
+	return nil
 }

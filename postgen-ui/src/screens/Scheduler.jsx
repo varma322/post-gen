@@ -82,6 +82,7 @@ export default function Scheduler({ apiFetch, active }) {
         body: JSON.stringify({
           name: schedule.name,
           kind: schedule.kind,
+          task: schedule.task || 'auto_post',
           interval_minutes: Number(schedule.interval_minutes) || 0,
           daily_at: schedule.daily_at || '',
           rotate_old_links: Boolean(schedule.rotate_old_links),
@@ -101,7 +102,7 @@ export default function Scheduler({ apiFetch, active }) {
         <div className="flex items-center gap-2">
           <Button onClick={() => load()} icon="refresh">Refresh</Button>
           <Button
-            onClick={() => setEditing({ kind: 'interval', interval_minutes: 60, enabled: true, rotate_old_links: false, name: '' })}
+            onClick={() => setEditing({ kind: 'interval', task: 'auto_post', interval_minutes: 60, enabled: true, rotate_old_links: false, name: '' })}
             variant="primary"
             icon="add"
           >
@@ -188,7 +189,14 @@ function ScheduleRow({ schedule, busy, onEdit, onToggle, onRun, onDelete }) {
   return (
     <tr className="border-b border-outline-variant/50 last:border-0 hover:bg-surface-container-high/50">
       <td className="px-5 py-3">
-        <div className="font-medium text-on-surface">{schedule.name}</div>
+        <div className="flex items-center gap-2">
+          <span className="font-medium text-on-surface">{schedule.name}</span>
+          {schedule.task === 'deal_discovery' && (
+            <span className="rounded-full border border-primary/30 bg-primary/15 px-2 py-0.5 text-label-sm text-primary">
+              Discovery
+            </span>
+          )}
+        </div>
         {schedule.rotate_old_links && (
           <div className="text-label-sm text-on-surface-variant">Reposts old links when pools run dry</div>
         )}
@@ -432,6 +440,28 @@ function ScheduleDialog({ schedule, busy, onCancel, onSave }) {
             </div>
 
             <div>
+              <span className="mb-1 block text-label-md text-on-surface">Task</span>
+              <div className="flex rounded border border-outline-variant p-0.5">
+                {[['auto_post', 'Publish posts'], ['deal_discovery', 'Discover deals']].map(([id, label]) => (
+                  <button
+                    key={id}
+                    onClick={() => set('task', id)}
+                    className={`flex-1 rounded px-3 py-1.5 text-label-md transition-colors ${
+                      (draft.task || 'auto_post') === id ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:text-on-surface'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1 text-label-sm text-on-surface-variant">
+                {(draft.task || 'auto_post') === 'deal_discovery'
+                  ? 'Searches Amazon, scores what it finds, and queues anything above the auto-queue threshold.'
+                  : 'Generates and publishes posts from the queue.'}
+              </p>
+            </div>
+
+            <div>
               <span className="mb-1 block text-label-md text-on-surface">Cadence</span>
               <div className="flex rounded border border-outline-variant p-0.5">
                 {[['interval', 'Every N minutes'], ['daily', 'Daily at a time']].map(([id, label]) => (
@@ -476,7 +506,7 @@ function ScheduleDialog({ schedule, busy, onCancel, onSave }) {
               </div>
             )}
 
-            <label className="flex items-start gap-2">
+            <label className={`flex items-start gap-2 ${(draft.task || 'auto_post') === 'deal_discovery' ? 'hidden' : ''}`}>
               <input
                 type="checkbox"
                 checked={Boolean(draft.rotate_old_links)}

@@ -5,5 +5,13 @@
     "mrp": ".basisPrice .a-offscreen, #corePriceDisplay_desktop_feature_div .basisPrice .a-offscreen, #corePriceDisplay_desktop_feature_div .a-text-price .a-offscreen, .a-text-price .a-offscreen",
     "features": "#feature-bullets li span.a-list-item",
     "image": "#landingImage, #imgBlkFront, #main-image"
+  },
+  "amazon_listings": {
+    "item": "#gridItemRoot, .zg-grid-general-faceout, [data-asin]",
+    "asin": "[data-asin]",
+    "title": ".p13n-sc-truncate-desktop-type2, ._cDEzb_p13n-sc-css-line-clamp-3_g3dy1, .p13n-sc-truncated",
+    "price": "._cDEzb_p13n-sc-price_3mJ9Z, .p13n-sc-price, .a-price .a-offscreen",
+    "mrp": ".a-text-price .a-offscreen, .a-price[data-a-strike='true'] .a-offscreen",
+    "link": "a.a-link-normal[href*='/dp/']"
   }
 }

@@ -297,3 +297,39 @@ func TestHandleDealQueueReportsUnavailableStorageAs503(t *testing.T) {
 		t.Errorf("status = %d, want 503", resp.Code)
 	}
 }
+
+func TestHandleAnalyticsDeals(t *testing.T) {
+	resp := do(t, stubGenerator{deals: sampleDeals()}, http.MethodGet, "/analytics/deals")
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.Code)
+	}
+
+	var analytics models.DealAnalytics
+	if err := json.NewDecoder(resp.Body).Decode(&analytics); err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	if analytics.Total != 2 {
+		t.Errorf("Total = %d, want 2", analytics.Total)
+	}
+	if analytics.ByProvider[models.DealProviderCreatorAPI] != 1 {
+		t.Errorf("ByProvider = %v, want the API deal counted", analytics.ByProvider)
+	}
+	if analytics.ByStatus[models.DealNew] != 1 {
+		t.Errorf("ByStatus = %v, want the new deal counted", analytics.ByStatus)
+	}
+}
+
+func TestHandleAnalyticsDealsRejectsNonGET(t *testing.T) {
+	resp := do(t, stubGenerator{}, http.MethodPost, "/analytics/deals")
+	if resp.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", resp.Code)
+	}
+}
+
+func TestHandleAnalyticsDealsReportsUnavailableStorageAs503(t *testing.T) {
+	resp := do(t, stubGenerator{dealsErr: core.ErrDealsUnavailable}, http.MethodGet, "/analytics/deals")
+	if resp.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", resp.Code)
+	}
+}

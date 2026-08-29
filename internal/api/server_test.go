@@ -201,6 +201,22 @@ func (s stubGenerator) DiscoverDeals(ctx context.Context) (*deals.Result, error)
 	return &deals.Result{ByProvider: map[string]int{}}, nil
 }
 
+func (s stubGenerator) DealAnalytics(ctx context.Context) (*models.DealAnalytics, error) {
+	if s.dealsErr != nil {
+		return nil, s.dealsErr
+	}
+	byStatus := map[string]int{}
+	byProvider := map[string]int{}
+	for _, deal := range s.deals {
+		byStatus[deal.Status]++
+		byProvider[deal.Provider]++
+	}
+	return &models.DealAnalytics{
+		Total: len(s.deals), ByStatus: byStatus, ByProvider: byProvider,
+		ProviderShare: map[string]float64{}, TopCategories: nil,
+	}, nil
+}
+
 func (s stubGenerator) WorkerStatus() models.WorkerStatus {
 	return models.WorkerStatus{Running: true, Phase: "idle"}
 }

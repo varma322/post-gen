@@ -14,11 +14,26 @@ const (
 	ScheduleDaily = "daily"
 )
 
+// Schedule tasks.
+//
+// Kind answers when a schedule fires; task answers what it does when it does.
+// They are separate axes, so a discovery schedule can be interval or daily
+// exactly like an auto-post one.
+const (
+	// TaskAutoPost runs the generate-and-publish pipeline.
+	TaskAutoPost = "auto_post"
+	// TaskDealDiscovery searches Amazon for deals and stores what it finds.
+	TaskDealDiscovery = "deal_discovery"
+)
+
 // JobSchedule is a named recurring trigger for the auto-post pipeline.
 type JobSchedule struct {
 	ID              int        `json:"id"`
 	Name            string     `json:"name"`
 	Kind            string     `json:"kind"`
+	// Task defaults to auto-post when absent, so a client that predates
+	// discovery keeps working unchanged.
+	Task            string     `json:"task,omitempty"`
 	IntervalMinutes int        `json:"interval_minutes,omitempty"`
 	DailyAt         string     `json:"daily_at,omitempty"`
 	RotateOldLinks  bool       `json:"rotate_old_links"`
@@ -30,10 +45,26 @@ type JobSchedule struct {
 	CreatedAt       time.Time  `json:"created_at"`
 }
 
-// Validate checks the schedule is coherent for its kind.
+// EffectiveTask is the task this schedule performs, defaulting to auto-post
+// for rows and payloads that predate the field.
+func (s JobSchedule) EffectiveTask() string {
+	if strings.TrimSpace(s.Task) == "" {
+		return TaskAutoPost
+	}
+	return s.Task
+}
+
+// Validate checks the schedule is coherent for its kind and task.
 func (s JobSchedule) Validate() error {
 	if strings.TrimSpace(s.Name) == "" {
 		return fmt.Errorf("schedule name is required")
+	}
+
+	switch s.EffectiveTask() {
+	case TaskAutoPost, TaskDealDiscovery:
+	default:
+		return fmt.Errorf("unknown schedule task %q: expected %q or %q",
+			s.Task, TaskAutoPost, TaskDealDiscovery)
 	}
 
 	switch s.Kind {

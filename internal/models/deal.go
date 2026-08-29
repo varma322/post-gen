@@ -152,3 +152,25 @@ func (c DealCandidate) Deal() Deal {
 		Status:          DealNew,
 	}
 }
+
+// DealAnalytics summarises the deal catalog for the analytics panel.
+type DealAnalytics struct {
+	Total int `json:"total"`
+	// ByStatus and ByProvider are counts across the whole catalog, not the
+	// page currently on screen, so the totals stay true as it grows.
+	ByStatus   map[string]int `json:"by_status"`
+	ByProvider map[string]int `json:"by_provider"`
+	// ProviderShare is the percentage each provider contributed, which is the
+	// "Creators API 92% / scraper 8%" split the plan asks for.
+	ProviderShare map[string]float64 `json:"provider_share"`
+	// TopCategories are the best-scoring categories, richest first.
+	TopCategories []CategoryDealStats `json:"top_categories"`
+}
+
+// CategoryDealStats is one category's contribution to the catalog.
+type CategoryDealStats struct {
+	Category     string  `json:"category"`
+	Deals        int     `json:"deals"`
+	AverageScore float64 `json:"average_score"`
+	Queued       int     `json:"queued"`
+}

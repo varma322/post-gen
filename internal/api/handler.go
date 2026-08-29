@@ -50,6 +50,7 @@ func newServer(engine Generator, templatesDir string, token string) http.Handler
 	mux.HandleFunc("/events/", srv.handleEventTrace)
 	mux.HandleFunc("/analytics/summary", srv.handleAnalyticsSummary)
 	mux.HandleFunc("/analytics/channels", srv.handleAnalyticsChannels)
+	mux.HandleFunc("/analytics/deals", srv.handleAnalyticsDeals)
 	mux.HandleFunc("/worker/status", srv.handleWorkerStatus)
 	mux.HandleFunc("/settings", srv.handleSettings)
 	mux.HandleFunc("/schedules", srv.handleSchedules)

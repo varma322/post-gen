@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"sync"
 	"time"
 
+	"post-gen/internal/config"
 	"post-gen/internal/deals"
 	"post-gen/internal/deals/providers"
 	"post-gen/internal/events"
@@ -185,19 +187,31 @@ func (e *Engine) discoveryService() (*deals.Service, error) {
 	}
 
 	e.discovery.once.Do(func() {
-		// nil fallback: discovery has no HTML equivalent yet. The Best Sellers
-		// lister becomes the second provider when it lands, rather than a
-		// fallback inside the API client.
+		// nil fallback: the API client delegates product lookups to HTML, but
+		// discovery's fallback is a different thing entirely - a listing
+		// scraper - and it belongs in the provider chain, not inside the client.
 		client := scraper.NewCreatorAPIClient(nil)
 		if client == nil {
 			e.discovery.err = ErrDiscoveryUnavailable
 			return
 		}
 
+		// The API answers first; the lister only runs for a query the API could
+		// not serve. It is omitted entirely when its selectors are missing,
+		// rather than added as a provider that always fails.
+		chain := []deals.DiscoveryProvider{providers.NewCreatorAPI(client, "")}
+		if listing, err := config.LoadListingSelectors(e.paths.SelectorsPath); err != nil {
+			log.Printf("[WARN] Could not load listing selectors, discovery has no fallback: %v", err)
+		} else if sel, ok := listing["amazon"]; ok {
+			chain = append(chain, providers.NewBestSellers(scraper.NewAmazonListScraper(sel), e.db, ""))
+		} else {
+			log.Printf("[INFO] No amazon_listings selectors configured; discovery has no HTML fallback.")
+		}
+
 		e.discovery.service = deals.NewService(
 			e.db,
 			e.events,
-			[]deals.DiscoveryProvider{providers.NewCreatorAPI(client, "")},
+			chain,
 			// Pace the matrix so one run does not spend the per-second budget
 			// the product-lookup path also draws on.
 			deals.WithQueryDelay(defaultDiscoveryQueryDelay),
@@ -228,4 +242,47 @@ func (e *Engine) ValidateDealCategories(ctx context.Context) error {
 		return fmt.Errorf("validating deal categories: %w", err)
 	}
 	return nil
+}
+
+// DealAnalytics summarises the whole deal catalog.
+//
+// Counts come from the database rather than a page of results, so the totals
+// stay true as the catalog outgrows any one listing.
+func (e *Engine) DealAnalytics(ctx context.Context) (*models.DealAnalytics, error) {
+	if e.db == nil {
+		return nil, ErrDealsUnavailable
+	}
+
+	byStatus, err := e.db.DealCountsByStatus(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byProvider, err := e.db.DealCountsByProvider(ctx)
+	if err != nil {
+		return nil, err
+	}
+	categories, err := e.db.DealCategoryStats(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	total := 0
+	for _, count := range byProvider {
+		total += count
+	}
+
+	share := make(map[string]float64, len(byProvider))
+	for provider, count := range byProvider {
+		if total > 0 {
+			share[provider] = math.Round(float64(count)/float64(total)*1000) / 10
+		}
+	}
+
+	return &models.DealAnalytics{
+		Total:         total,
+		ByStatus:      byStatus,
+		ByProvider:    byProvider,
+		ProviderShare: share,
+		TopCategories: categories,
+	}, nil
 }
