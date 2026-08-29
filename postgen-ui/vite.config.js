@@ -57,6 +57,14 @@ export default defineConfig({
       '/schedules': {
         target: 'http://localhost:8088',
         changeOrigin: true,
+      },
+      // Covers /deals, /deals/{asin} and /deals/discover. Without it these
+      // fall through to the SPA fallback and the screen receives index.html
+      // where it expected JSON - which only shows up in dev, since the
+      // production build is served from the same origin as the API.
+      '/deals': {
+        target: 'http://localhost:8088',
+        changeOrigin: true,
       }
     }
   },
