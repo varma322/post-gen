@@ -409,3 +409,55 @@ func TestRunStopsOnACancelledContext(t *testing.T) {
 		t.Errorf("store called %d times after cancellation", store.calls)
 	}
 }
+
+func TestRunApprovesDealsThatClearTheQueueThreshold(t *testing.T) {
+	// A high-scoring deal is stored as approved, not queued: queueing costs a
+	// product lookup, so it is carried out separately at its own pace.
+	store := newFakeStore()
+	provider := &fakeProvider{name: models.DealProviderCreatorAPI, candidates: []models.DealCandidate{
+		candidate("B0APPROVE01", 80),
+		candidate("B0LOWSCORE1", 10),
+	}}
+
+	service := NewService(store, nil, []DiscoveryProvider{provider},
+		WithCategories(oneCategory()), WithSavingTiers([]int{50}),
+		WithScorer(Score))
+
+	if _, err := service.Run(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	high := store.deals["B0APPROVE01"]
+	if Decide(high.Score) != DecisionQueue {
+		t.Fatalf("test setup: %s scored %d, expected it to clear the threshold", high.ASIN, high.Score)
+	}
+	if high.Status != models.DealApproved {
+		t.Errorf("status = %q, want %q for a deal above the threshold", high.Status, models.DealApproved)
+	}
+
+	low := store.deals["B0LOWSCORE1"]
+	if low.Status != models.DealNew {
+		t.Errorf("status = %q, want %q for a deal below the threshold", low.Status, models.DealNew)
+	}
+}
+
+func TestRunNeverAutoIgnores(t *testing.T) {
+	// Ignoring is a decision that sticks across re-discovery, so it stays a
+	// deliberate act rather than something a low score does silently.
+	store := newFakeStore()
+	provider := &fakeProvider{name: models.DealProviderCreatorAPI, candidates: []models.DealCandidate{
+		candidate("B0VERYLOW01", 1),
+	}}
+
+	service := NewService(store, nil, []DiscoveryProvider{provider},
+		WithCategories(oneCategory()), WithSavingTiers([]int{50}),
+		WithScorer(Score))
+
+	if _, err := service.Run(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := store.deals["B0VERYLOW01"].Status; got == models.DealIgnored {
+		t.Error("a low score should not ignore a deal on its own")
+	}
+}

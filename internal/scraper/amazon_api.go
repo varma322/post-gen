@@ -27,6 +27,11 @@ var (
 	errCreatorsAPIIneligible     = errors.New("creators api: associate not eligible")
 	errCreatorsAPINetworkFailure = errors.New("creators api: network failure")
 	errCreatorsAPIThrottled      = errors.New("creators api: rate limit exceeded")
+	// errCreatorsAPIInvalidPartnerTag means the tag sent does not belong to the
+	// store the credentials authenticate. It is a misconfiguration of one
+	// registry entry, not a fault of the request, so it is treated like
+	// ineligibility: sideline that account and try the next.
+	errCreatorsAPIInvalidPartnerTag = errors.New("creators api: partner tag not mapped to these credentials")
 )
 
 // defaultThrottleCooldown is how long the API is left alone after a 429 that

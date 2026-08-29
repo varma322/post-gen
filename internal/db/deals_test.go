@@ -398,3 +398,75 @@ func TestDealCountsByProviderAndStatus(t *testing.T) {
 		t.Errorf("expected at least the two new deals counted, got %v", byStatus)
 	}
 }
+
+func TestUpsertDealPromotesBetweenNewAndApproved(t *testing.T) {
+	// Scoring must be able to promote a deal whose price dropped, and demote
+	// one whose price recovered, without a human touching it.
+	db := testDB(t)
+	ctx := context.Background()
+
+	asin := testASINPrefix + "15"
+	cleanupDeals(t, db, asin)
+
+	if _, err := db.UpsertDeal(ctx, sampleDeal(asin)); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	promoted := sampleDeal(asin)
+	promoted.Status = models.DealApproved
+	if _, err := db.UpsertDeal(ctx, promoted); err != nil {
+		t.Fatalf("promoting: %v", err)
+	}
+
+	after, err := db.GetDeal(ctx, asin)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if after.Status != models.DealApproved {
+		t.Errorf("status = %q, want a re-scored deal promoted to %q", after.Status, models.DealApproved)
+	}
+
+	demoted := sampleDeal(asin)
+	demoted.Status = models.DealNew
+	if _, err := db.UpsertDeal(ctx, demoted); err != nil {
+		t.Fatalf("demoting: %v", err)
+	}
+
+	after, err = db.GetDeal(ctx, asin)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if after.Status != models.DealNew {
+		t.Errorf("status = %q, want demotion back to %q", after.Status, models.DealNew)
+	}
+}
+
+func TestUpsertDealPreservesTerminalStatuses(t *testing.T) {
+	db := testDB(t)
+	ctx := context.Background()
+
+	for i, terminal := range []string{models.DealIgnored, models.DealQueued, models.DealPosted} {
+		asin := testASINPrefix + "2" + string(rune('0'+i))
+		cleanupDeals(t, db, asin)
+
+		if _, err := db.UpsertDeal(ctx, sampleDeal(asin)); err != nil {
+			t.Fatalf("upsert: %v", err)
+		}
+		if _, err := db.SetDealStatus(ctx, asin, terminal); err != nil {
+			t.Fatalf("setting %s: %v", terminal, err)
+		}
+
+		// Re-discovery arrives carrying "new", as every candidate does.
+		if _, err := db.UpsertDeal(ctx, sampleDeal(asin)); err != nil {
+			t.Fatalf("re-upsert: %v", err)
+		}
+
+		after, err := db.GetDeal(ctx, asin)
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if after.Status != terminal {
+			t.Errorf("status = %q, want %q preserved across re-discovery", after.Status, terminal)
+		}
+	}
+}

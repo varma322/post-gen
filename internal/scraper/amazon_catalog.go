@@ -17,6 +17,12 @@ import (
 // searchItems and getBrowseNodes differ only in operation name and payload.
 const catalogBaseURL = "https://creatorsapi.amazon/catalog/v1/"
 
+// invalidTagCooldown sidelines an account whose partner tag does not match its
+// credentials. Longer than the throttle cooldown because nothing about waiting
+// fixes it - only a corrected registry entry does - but not permanent, so a fix
+// takes effect without a restart.
+const invalidTagCooldown = 6 * time.Hour
+
 // withEligibleAccount runs call against each configured account in turn,
 // returning the first success.
 //
@@ -69,6 +75,14 @@ func withEligibleAccount[T any](
 			tripCreatorAPICircuit(partnerTag, marketplace, 1*time.Hour)
 			log.Printf("[WARN] Creators API: %s not eligible on %s; pausing that account for 1 hour",
 				partnerTag, marketplace)
+		case errors.Is(err, errCreatorsAPIInvalidPartnerTag):
+			// A misconfigured registry entry, not a transient fault. Sideline
+			// it for long enough that it does not cost a wasted call on every
+			// rotation, and say plainly what needs fixing.
+			tripCreatorAPICircuit(partnerTag, marketplace, invalidTagCooldown)
+			log.Printf("[ERR] Creators API: partner tag %q is not mapped to the store behind its "+
+				"credentials on %s. Fix the tag for that entry in %s/%s; pausing it for %s.",
+				partnerTag, marketplace, CredentialsDir(), CredentialRegistryFile, invalidTagCooldown)
 		default:
 			return zero, err
 		}
@@ -155,9 +169,13 @@ func postCatalog(ctx context.Context, tokenManager *TokenManager, operation, mar
 
 	if resp.StatusCode != http.StatusOK {
 		text := string(body)
-		if strings.Contains(text, "AssociateNotEligible") {
+		switch {
+		case strings.Contains(text, "AssociateNotEligible"):
 			return nil, fmt.Errorf("%w: %s failed (HTTP %d): %s",
 				errCreatorsAPIIneligible, operation, resp.StatusCode, text)
+		case strings.Contains(text, "InvalidPartnerTag"):
+			return nil, fmt.Errorf("%w: %s failed (HTTP %d): %s",
+				errCreatorsAPIInvalidPartnerTag, operation, resp.StatusCode, text)
 		}
 		return nil, fmt.Errorf("%s failed (HTTP %d): %s", operation, resp.StatusCode, text)
 	}

@@ -262,10 +262,19 @@ func (s *Service) discoverOne(ctx context.Context, query models.DealQuery) ([]mo
 }
 
 // storeCandidate scores and persists one candidate.
+//
+// A deal that clears the auto-queue threshold is stored as approved rather than
+// queued: queueing re-fetches the product to collect the feature bullets the
+// templates need, and doing that inline would turn a paced discovery run into
+// dozens of extra lookups. Approved is the standing instruction to queue it;
+// QueueApprovedDeals carries it out at its own pace.
 func (s *Service) storeCandidate(ctx context.Context, candidate models.DealCandidate, traceID string) (bool, error) {
 	deal := candidate.Deal()
 	if s.scorer != nil {
 		deal.Score = s.scorer(deal)
+		if Decide(deal.Score) == DecisionQueue {
+			deal.Status = models.DealApproved
+		}
 	}
 
 	created, err := s.store.UpsertDeal(ctx, deal)

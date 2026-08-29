@@ -83,6 +83,23 @@ func (s server) handleDealByASIN(w http.ResponseWriter, r *http.Request) {
 	case "ignore":
 		s.setDealStatus(w, r, asin, models.DealIgnored)
 
+	case "queue":
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, http.MethodPost)
+			return
+		}
+
+		deal, err := s.engine.QueueDeal(r.Context(), asin)
+		if err != nil {
+			writeDealError(w, err)
+			return
+		}
+		if deal == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "deal not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, deal)
+
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown deal action " + action})
 	}

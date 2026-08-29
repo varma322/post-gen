@@ -260,3 +260,40 @@ func TestDealsEndpointsRequireAuth(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleDealQueue(t *testing.T) {
+	resp := do(t, stubGenerator{deals: sampleDeals()}, http.MethodPost, "/deals/B0APITEST01/queue")
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.Code)
+	}
+
+	var deal models.Deal
+	if err := json.NewDecoder(resp.Body).Decode(&deal); err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	if deal.Status != models.DealQueued {
+		t.Errorf("status = %q, want %q", deal.Status, models.DealQueued)
+	}
+}
+
+func TestHandleDealQueueRequiresPOST(t *testing.T) {
+	resp := do(t, stubGenerator{deals: sampleDeals()}, http.MethodGet, "/deals/B0APITEST01/queue")
+	if resp.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", resp.Code)
+	}
+}
+
+func TestHandleDealQueueReturns404ForAnUnknownASIN(t *testing.T) {
+	resp := do(t, stubGenerator{deals: sampleDeals()}, http.MethodPost, "/deals/B0MISSING01/queue")
+	if resp.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.Code)
+	}
+}
+
+func TestHandleDealQueueReportsUnavailableStorageAs503(t *testing.T) {
+	resp := do(t, stubGenerator{dealsErr: core.ErrDealsUnavailable}, http.MethodPost, "/deals/B0APITEST01/queue")
+	if resp.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", resp.Code)
+	}
+}

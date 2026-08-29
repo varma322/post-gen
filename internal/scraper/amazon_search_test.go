@@ -355,3 +355,66 @@ func TestSearchItemsWithoutAPartnerTagDoesNotCall(t *testing.T) {
 		t.Errorf("err = %v, want ErrNoEligibleAccount with nothing configured", err)
 	}
 }
+
+func TestSearchItemsFailsOverOnAnInvalidPartnerTag(t *testing.T) {
+	// A tag that is not mapped to the store behind its credentials is a
+	// misconfigured registry entry, not a bad request. Without failover, every
+	// rotation onto that account would waste a call and drop to HTML.
+	const (
+		misconfigured = "invalidtag-broken-21"
+		working       = "invalidtag-working-21"
+	)
+
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		tag, _ := payload["partnerTag"].(string)
+
+		w.Header().Set("Content-Type", "application/json")
+		if tag == misconfigured {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"message":"Partner tag in the request is invalid or is not mapped to the store associated with your credential.","reason":"InvalidPartnerTag","type":"ValidationException"}`))
+			return
+		}
+		_, _ = w.Write([]byte(searchJSON(fullItem)))
+	}))
+	t.Cleanup(apiServer.Close)
+
+	oauthServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "tok", "expires_in": 3600})
+	}))
+	t.Cleanup(oauthServer.Close)
+
+	oldTransport := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = oldTransport })
+	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host == "creatorsapi.amazon" {
+			target, _ := url.Parse(apiServer.URL)
+			req.URL.Scheme, req.URL.Host = target.Scheme, target.Host
+		}
+		return oldTransport.RoundTrip(req)
+	})
+
+	registry := NewCredentialRegistry([]APICredential{
+		{Tag: misconfigured, ClientID: "id", ClientSecret: "secret", TokenURL: oauthServer.URL},
+		{Tag: working, ClientID: "id", ClientSecret: "secret", TokenURL: oauthServer.URL},
+	})
+	scraper := NewAmazonCreatorAPIScraperWithRegistry(registry, nil)
+
+	ctx := WithPartnerTag(context.Background(), misconfigured)
+
+	candidates, err := scraper.SearchItems(ctx, SearchOptions{Keywords: "headphones"})
+	if err != nil {
+		t.Fatalf("expected failover past the misconfigured tag, got: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("got %d candidates, want the working account's result", len(candidates))
+	}
+	if !creatorAPICircuitOpen(misconfigured, "www.amazon.in") {
+		t.Error("the misconfigured account's circuit should be open so it stops costing calls")
+	}
+	if creatorAPICircuitOpen(working, "www.amazon.in") {
+		t.Error("the working account should not have been penalised")
+	}
+}

@@ -13,6 +13,7 @@ export const NAV_ITEMS = [
   { id: 'publisher', label: 'Publisher', icon: 'upload' },
   { id: 'channels', label: 'Channels', icon: 'hub' },
   { id: 'analytics', label: 'Analytics', icon: 'analytics' },
+  { id: 'deals', label: 'Deals', icon: 'local_offer' },
   { id: 'queue', label: 'Content Queue', icon: 'view_list' },
   { id: 'scheduler', label: 'Scheduler', icon: 'calendar_month' },
   { id: 'activity', label: 'Activity Log', icon: 'history' },

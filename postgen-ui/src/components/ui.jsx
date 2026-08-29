@@ -121,6 +121,13 @@ export function StatusPill({ status }) {
     running: 'bg-primary/15 text-primary border-primary/30',
     pending: 'bg-surface-container-highest text-on-surface-variant border-outline-variant',
     queued: 'bg-tertiary/15 text-tertiary border-tertiary/30',
+    // Deal pipeline: new is awaiting a look, approved will be queued
+    // automatically, posted reached a page, expired dropped out of discovery.
+    new: 'bg-primary/15 text-primary border-primary/30',
+    approved: 'bg-secondary/15 text-secondary border-secondary/30',
+    posted: 'bg-secondary/15 text-secondary border-secondary/30',
+    expired: 'bg-tertiary/15 text-tertiary border-tertiary/30',
+    ignored: 'bg-surface-container-highest text-on-surface-variant border-outline-variant',
     cooldown: 'bg-tertiary/15 text-tertiary border-tertiary/30',
     skipped: 'bg-tertiary/15 text-tertiary border-tertiary/30',
     warn: 'bg-tertiary/15 text-tertiary border-tertiary/30',

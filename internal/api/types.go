@@ -45,6 +45,7 @@ type Generator interface {
 	Deals(ctx context.Context, filter models.DealFilter) ([]models.Deal, error)
 	Deal(ctx context.Context, asin string) (*models.Deal, error)
 	SetDealStatus(ctx context.Context, asin, status string) (bool, error)
+	QueueDeal(ctx context.Context, asin string) (*models.Deal, error)
 	DiscoverDeals(ctx context.Context) (*deals.Result, error)
 }
 

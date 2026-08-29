@@ -20,10 +20,14 @@ const dealColumns = `id, asin, title, url, category, image_url, price, old_price
 // created reports whether this was the first sighting, which is what separates
 // a DEAL_DISCOVERED event from a DEAL_UPDATED one.
 //
-// Two fields are deliberately preserved across a re-sighting: first_seen, so the
-// age of a deal stays true, and status, so a deal that was ignored or already
-// posted is not quietly reset to "new" the next time discovery runs. Everything
-// price-shaped is refreshed, because that is the part that actually moves.
+// first_seen is preserved across a re-sighting so the age of a deal stays true.
+// Everything price-shaped is refreshed, because that is the part that moves.
+//
+// Status is preserved only where a decision has already been made about the
+// deal: ignored, queued and posted all stand, so re-discovery cannot revive a
+// rejected deal or rewrite the record of one that reached a page. A deal still
+// sitting at new or approved is allowed to move between those two, so that a
+// price drop can promote it and a price rise can demote it.
 func (p *Pool) UpsertDeal(ctx context.Context, deal models.Deal) (created bool, err error) {
 	if err := deal.Validate(); err != nil {
 		return false, err
@@ -43,6 +47,10 @@ func (p *Pool) UpsertDeal(ctx context.Context, deal models.Deal) (created bool, 
 			discount_percent = EXCLUDED.discount_percent,
 			score            = EXCLUDED.score,
 			provider         = EXCLUDED.provider,
+			status           = CASE
+				WHEN deals.status IN ('ignored', 'queued', 'posted') THEN deals.status
+				ELSE EXCLUDED.status
+			END,
 			last_seen        = CURRENT_TIMESTAMP
 		RETURNING (xmax = 0)
 	`,

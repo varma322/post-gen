@@ -177,6 +177,20 @@ func (s stubGenerator) SetDealStatus(ctx context.Context, asin, status string) (
 	return false, nil
 }
 
+func (s stubGenerator) QueueDeal(ctx context.Context, asin string) (*models.Deal, error) {
+	if s.dealsErr != nil {
+		return nil, s.dealsErr
+	}
+	for i := range s.deals {
+		if s.deals[i].ASIN == asin {
+			queued := s.deals[i]
+			queued.Status = models.DealQueued
+			return &queued, nil
+		}
+	}
+	return nil, nil
+}
+
 func (s stubGenerator) DiscoverDeals(ctx context.Context) (*deals.Result, error) {
 	if s.discoverErr != nil {
 		return s.discoverResult, s.discoverErr

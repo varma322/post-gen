@@ -7,6 +7,7 @@ import ActivityLog from './screens/ActivityLog';
 import Analytics from './screens/Analytics';
 import Channels from './screens/Channels';
 import ContentQueue from './screens/ContentQueue';
+import Deals from './screens/Deals';
 import Publisher from './screens/Publisher';
 import Scheduler from './screens/Scheduler';
 import TemplatesManager from './screens/TemplatesManager';
@@ -21,7 +22,7 @@ const WORKER_POLL_MS = 15000;
  * unknown or absent hash.
  */
 const VALID_TABS = new Set([
-  'dashboard', 'publisher', 'channels', 'analytics', 'queue',
+  'dashboard', 'publisher', 'channels', 'analytics', 'deals', 'queue',
   'scheduler', 'activity', 'templates', 'accounts', 'settings',
 ]);
 
@@ -152,6 +153,10 @@ export default function App() {
 
       <Pane active={activeTab === 'analytics'}>
         <Analytics apiFetch={apiFetch} />
+      </Pane>
+
+      <Pane active={activeTab === 'deals'}>
+        <Deals apiFetch={apiFetch} />
       </Pane>
 
       <Pane active={activeTab === 'queue'}>
