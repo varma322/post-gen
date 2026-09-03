@@ -408,7 +408,6 @@ func TestQueueAndAutoPostRequiresDatabase(t *testing.T) {
 	}
 }
 
-
 func TestCheckDailyQuotaSkippedWithoutDatabase(t *testing.T) {
 	// JSON-fallback mode has no publish history to count, so the quota is not
 	// enforceable there and must not block a publish.
@@ -442,5 +441,38 @@ func TestQuotaExceededErrorMessage(t *testing.T) {
 		if !strings.Contains(message, want) {
 			t.Errorf("error message %q should mention %q", message, want)
 		}
+	}
+}
+
+// accountBatchSize became a pure function when TriggerAutoPostJob started
+// threading the eligibility check's count into it instead of re-querying.
+// These cases pin the fail-open and quota-boundary behavior that move made
+// easy to get wrong.
+func TestAccountBatchSize(t *testing.T) {
+	tests := []struct {
+		name       string
+		maxPerDay  int
+		todayCount int
+		want       int
+	}{
+		{"uncapped account gets one item", 0, 0, 1},
+		{"uncapped account ignores the count", 0, 99, 1},
+		{"negative cap is treated as uncapped", -3, 5, 1},
+		{"unknown count fails open to one", 10, -1, 1},
+		{"unknown count fails open even when uncapped", 0, -1, 1},
+		{"fresh account gets its whole quota", 5, 0, 5},
+		{"partly used quota gets the remainder", 5, 3, 2},
+		{"exactly at quota gets nothing", 5, 5, 0},
+		{"over quota gets nothing, never negative", 5, 9, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			acc := models.Account{Name: "acct", MaxPostsPerDay: tt.maxPerDay}
+			if got := accountBatchSize(acc, tt.todayCount); got != tt.want {
+				t.Errorf("accountBatchSize(max=%d, today=%d) = %d, want %d",
+					tt.maxPerDay, tt.todayCount, got, tt.want)
+			}
+		})
 	}
 }

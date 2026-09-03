@@ -825,12 +825,13 @@ func (e *Engine) TriggerAutoPostJob(ctx context.Context, rotateOldLinks bool) (i
 	usedURLs := make(map[string]bool)
 
 	for _, acc := range activeAccounts {
-		if eligible, reason, _ := e.checkAccountEligibility(ctx, acc, time.Now()); !eligible {
+		eligible, reason, _, todayCount := e.checkAccountEligibility(ctx, acc, time.Now())
+		if !eligible {
 			log.Printf("[INFO] Skipping account %s: %s", acc.Name, reason)
 			continue
 		}
 
-		batchSize := e.accountBatchSize(ctx, acc)
+		batchSize := accountBatchSize(acc, todayCount)
 		if batchSize == 0 {
 			log.Printf("[INFO] Skipping account %s: daily post quota already filled", acc.Name)
 			continue
@@ -975,15 +976,13 @@ func (e *Engine) TriggerAutoPostJob(ctx context.Context, rotateOldLinks bool) (i
 // assign to acc in this run: its full remaining daily quota if MaxPostsPerDay
 // is set, or 1 (the pre-existing behavior) for uncapped accounts, so an
 // unlimited account doesn't get an unbounded number of items queued at once.
-// On a transient error counting today's posts, it fails open to 1.
-func (e *Engine) accountBatchSize(ctx context.Context, acc models.Account) int {
-	if acc.MaxPostsPerDay <= 0 {
-		return 1
-	}
-
-	todayCount, err := e.db.CountPostsTodayForAccount(ctx, acc.Name)
-	if err != nil {
-		log.Printf("[WARN] Failed to count today's posts for account %s: %v", acc.Name, err)
+//
+// todayCount comes from the caller's eligibility check rather than a query of
+// its own: the two used to count separately, moments apart, and could disagree
+// if a publish landed in between. A negative todayCount means the count could
+// not be read, and it fails open to 1 the way the separate query did.
+func accountBatchSize(acc models.Account, todayCount int) int {
+	if acc.MaxPostsPerDay <= 0 || todayCount < 0 {
 		return 1
 	}
 
@@ -1041,20 +1040,25 @@ func (e *Engine) checkDailyQuota(ctx context.Context, acc models.Account) error 
 // assumed non-nil. On a transient error fetching post history, it logs and
 // fails open (treats the account as eligible) rather than blocking the run.
 // The retryable return value is meaningless when eligible is true.
-func (e *Engine) checkAccountEligibility(ctx context.Context, acc models.Account, now time.Time) (eligible bool, reason string, retryable bool) {
+//
+// todayCount is returned so a caller that also needs it - TriggerAutoPostJob,
+// sizing the batch - does not pay for the same count twice. It is -1 when the
+// count could not be read, which is also when eligibility fails open.
+func (e *Engine) checkAccountEligibility(ctx context.Context, acc models.Account, now time.Time) (eligible bool, reason string, retryable bool, todayCount int) {
 	todayCount, err := e.db.CountPostsTodayForAccount(ctx, acc.Name)
 	if err != nil {
 		log.Printf("[WARN] Failed to count today's posts for account %s: %v", acc.Name, err)
-		return true, "", true
+		return true, "", true, -1
 	}
 
 	lastPostTime, err := e.db.GetLastPublishedAtForAccount(ctx, acc.Name)
 	if err != nil {
 		log.Printf("[WARN] Failed to get last published time for account %s: %v", acc.Name, err)
-		return true, "", true
+		return true, "", true, todayCount
 	}
 
-	return acc.IsEligibleToPost(now, todayCount, lastPostTime)
+	eligible, reason, retryable = acc.IsEligibleToPost(now, todayCount, lastPostTime)
+	return eligible, reason, retryable, todayCount
 }
 
 // GetActiveJob retrieves current active job status

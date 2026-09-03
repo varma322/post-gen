@@ -267,7 +267,7 @@ func (w *Worker) processNextJobItem() {
 		}
 		acc := resolvedAccounts[0]
 
-		eligible, reason, retryable := w.engine.checkAccountEligibility(ctx, acc, now)
+		eligible, reason, retryable, _ := w.engine.checkAccountEligibility(ctx, acc, now)
 		if eligible {
 			if nextItem == nil {
 				nextItem = item
