@@ -588,21 +588,7 @@ func (p *Pool) GetQueuedProducts(ctx context.Context) ([]models.QueuedProduct, e
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var products []models.QueuedProduct
-	for rows.Next() {
-		var qp models.QueuedProduct
-		var scrapedJSON []byte
-		if err := rows.Scan(&qp.ID, &qp.URL, &qp.Title, &qp.Price, &qp.ImageURL, &scrapedJSON, &qp.Status, &qp.CreatedAt); err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal(scrapedJSON, &qp.ScrapedData); err != nil {
-			return nil, err
-		}
-		products = append(products, qp)
-	}
-	return products, nil
+	return scanQueuedProducts(rows)
 }
 
 // DeleteQueuedProduct deletes a product from the queue by ID.
@@ -862,17 +848,7 @@ func (p *Pool) GetCandidateAccountLinks(ctx context.Context, accountName string,
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var links []models.AccountLink
-	for rows.Next() {
-		var link models.AccountLink
-		if err := rows.Scan(&link.ID, &link.AccountName, &link.URL, &link.CreatedAt); err != nil {
-			return nil, err
-		}
-		links = append(links, link)
-	}
-	return links, nil
+	return scanAccountLinks(rows)
 }
 
 // GetRotationCandidateAccountLinks returns up to limit links from the
@@ -899,17 +875,7 @@ func (p *Pool) GetRotationCandidateAccountLinks(ctx context.Context, accountName
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var links []models.AccountLink
-	for rows.Next() {
-		var link models.AccountLink
-		if err := rows.Scan(&link.ID, &link.AccountName, &link.URL, &link.CreatedAt); err != nil {
-			return nil, err
-		}
-		links = append(links, link)
-	}
-	return links, nil
+	return scanAccountLinks(rows)
 }
 
 // GetRotationCandidateProductsForAccount is the shared-queue counterpart to
@@ -933,21 +899,7 @@ func (p *Pool) GetRotationCandidateProductsForAccount(ctx context.Context, accou
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var products []models.QueuedProduct
-	for rows.Next() {
-		var qp models.QueuedProduct
-		var scrapedJSON []byte
-		if err := rows.Scan(&qp.ID, &qp.URL, &qp.Title, &qp.Price, &qp.ImageURL, &scrapedJSON, &qp.Status, &qp.CreatedAt); err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal(scrapedJSON, &qp.ScrapedData); err != nil {
-			return nil, err
-		}
-		products = append(products, qp)
-	}
-	return products, nil
+	return scanQueuedProducts(rows)
 }
 
 // CountPostsTodayForAccount returns how many posts the given account has
@@ -1028,6 +980,52 @@ func (p *Pool) InsertEvents(ctx context.Context, batch []events.Event) error {
 		}
 	}
 	return nil
+}
+
+// scanQueuedProducts drains rows selected as the full queued_products
+// projection - id, url, title, price, image_url, scraped_data, status,
+// created_at - decoding each row's scraped_data document. It takes ownership of
+// rows and closes them.
+//
+// Shared by the whole-queue read and the per-account rotation read, whose scan
+// loops were identical, so a change to the projection or to the decode is made
+// once rather than in two places that had already drifted apart in their error
+// handling.
+func scanQueuedProducts(rows pgx.Rows) ([]models.QueuedProduct, error) {
+	defer rows.Close()
+
+	var products []models.QueuedProduct
+	for rows.Next() {
+		var qp models.QueuedProduct
+		var scrapedJSON []byte
+		if err := rows.Scan(&qp.ID, &qp.URL, &qp.Title, &qp.Price, &qp.ImageURL, &scrapedJSON, &qp.Status, &qp.CreatedAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(scrapedJSON, &qp.ScrapedData); err != nil {
+			return nil, err
+		}
+		products = append(products, qp)
+	}
+	return products, rows.Err()
+}
+
+// scanAccountLinks drains rows selected as the four-column account_links
+// projection - id, account_name, url, created_at - and closes them.
+//
+// GetAccountLinks deliberately does not use this: it selects a fifth column,
+// posted, and scans its own rows.
+func scanAccountLinks(rows pgx.Rows) ([]models.AccountLink, error) {
+	defer rows.Close()
+
+	var links []models.AccountLink
+	for rows.Next() {
+		var link models.AccountLink
+		if err := rows.Scan(&link.ID, &link.AccountName, &link.URL, &link.CreatedAt); err != nil {
+			return nil, err
+		}
+		links = append(links, link)
+	}
+	return links, rows.Err()
 }
 
 // nullIfEmpty maps an empty string to a SQL NULL, so optional columns stay
