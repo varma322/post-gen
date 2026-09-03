@@ -204,7 +204,7 @@ func (p *Pool) migrate(ctx context.Context) error {
 	-- the shared queued_products pool. A link's availability as a candidate is
 	-- derived from published_posts (has it ever been posted for this account?)
 	-- rather than a stored status flag, so it never needs to be reconciled with
-	-- job outcomes - the same pattern queued_products/GetCandidateProductsForAccount
+	-- job outcomes - the same pattern queued_products/CandidateProductURLsForAccount
 	-- already uses.
 	CREATE TABLE IF NOT EXISTS account_links (
 		id                   SERIAL PRIMARY KEY,
@@ -765,10 +765,17 @@ func (p *Pool) RecoverStaleJobItems(ctx context.Context, staleAfter time.Duratio
 	return tag.RowsAffected(), nil
 }
 
-// GetCandidateProductsForAccount finds all queued products that have not been posted to the given account.
-func (p *Pool) GetCandidateProductsForAccount(ctx context.Context, accountName string) ([]models.QueuedProduct, error) {
+// CandidateProductURLsForAccount returns the URLs of queued products the given
+// account has not published yet, newest first.
+//
+// URLs only, deliberately. The caller builds job items keyed by URL and reads
+// nothing else off the row, but this used to select the whole record - including
+// scraped_data, a full product JSON document - and unmarshal every one of them
+// to reach a single string. That cost ran per row, per active account, on every
+// job trigger.
+func (p *Pool) CandidateProductURLsForAccount(ctx context.Context, accountName string) ([]string, error) {
 	rows, err := p.pool.Query(ctx, `
-		SELECT id, url, title, price, image_url, scraped_data, status, created_at
+		SELECT url
 		FROM queued_products
 		WHERE status = 'queued'
 		  AND url NOT IN (
@@ -781,19 +788,15 @@ func (p *Pool) GetCandidateProductsForAccount(ctx context.Context, accountName s
 	}
 	defer rows.Close()
 
-	var products []models.QueuedProduct
+	var urls []string
 	for rows.Next() {
-		var qp models.QueuedProduct
-		var scrapedJSON []byte
-		if err := rows.Scan(&qp.ID, &qp.URL, &qp.Title, &qp.Price, &qp.ImageURL, &scrapedJSON, &qp.Status, &qp.CreatedAt); err != nil {
+		var url string
+		if err := rows.Scan(&url); err != nil {
 			return nil, err
 		}
-		if err := json.Unmarshal(scrapedJSON, &qp.ScrapedData); err != nil {
-			return nil, err
-		}
-		products = append(products, qp)
+		urls = append(urls, url)
 	}
-	return products, nil
+	return urls, rows.Err()
 }
 
 // AddAccountLink adds a URL to an account's dedicated link pool. A duplicate

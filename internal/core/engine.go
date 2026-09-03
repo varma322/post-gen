@@ -854,18 +854,17 @@ func (e *Engine) TriggerAutoPostJob(ctx context.Context, rotateOldLinks bool) (i
 
 		// Fall back to the shared product queue for any remaining shortfall.
 		if added < batchSize {
-			candidates, err := e.db.GetCandidateProductsForAccount(ctx, acc.Name)
+			candidates, err := e.db.CandidateProductURLsForAccount(ctx, acc.Name)
 			if err != nil {
 				log.Printf("[WARN] Failed to get candidates for account %s: %v", acc.Name, err)
 				candidates = nil
 			}
 
 			// First pass: prefer URLs not already claimed by another account this run.
-			for i := range candidates {
+			for _, url := range candidates {
 				if added >= batchSize {
 					break
 				}
-				url := candidates[i].URL
 				if assignedForAccount[url] || usedURLs[url] {
 					continue
 				}
@@ -877,11 +876,10 @@ func (e *Engine) TriggerAutoPostJob(ctx context.Context, rotateOldLinks bool) (i
 
 			// Second pass: rather than leave the account short a post, allow
 			// reusing a URL already claimed by a different account this run.
-			for i := range candidates {
+			for _, url := range candidates {
 				if added >= batchSize {
 					break
 				}
-				url := candidates[i].URL
 				if assignedForAccount[url] {
 					continue
 				}
