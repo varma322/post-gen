@@ -10,16 +10,15 @@ import (
 type Paths struct {
 	AccountsPath  string
 	SelectorsPath string
-	OutputDir     string
 	PostsPath     string
 }
 
-// DefaultPaths returns the current filesystem layout used by the CLI.
+// DefaultPaths returns the on-disk fallback layout used when PostgreSQL is
+// unavailable: accounts, scraper selectors, and the local published-post log.
 func DefaultPaths() Paths {
 	return Paths{
 		AccountsPath:  "accounts.json",
 		SelectorsPath: "selectors.json",
-		OutputDir:     "output",
 		PostsPath:     "posts.json",
 	}
 }
