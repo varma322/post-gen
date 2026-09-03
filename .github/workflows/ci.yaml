@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to the same branch makes the previous run irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+
+    # internal/db's tests call New(), which connects and then runs migrations,
+    # so an empty database is all they need. Without this service they would
+    # still pass - testDB calls t.Skipf when Postgres is unreachable - but
+    # every table-backed test would silently skip, which is most of the
+    # coverage for db/deals, db/schedules and db/analytics.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgen
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd=pg_isready
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: "5432"
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          DB_NAME: postgen
+        run: go test ./...
+
+      # Advisory, not a gate. The race detector needs cgo and a C toolchain,
+      # which the machine this was written on does not have, so this run has
+      # never been verified green. The worker, event logger and circuit breaker
+      # are all concurrent, so it is worth knowing about - but it is not
+      # blocking until one clean run proves it. Promote then.
+      - name: Test with race detector (advisory)
+        continue-on-error: true
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: "5432"
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          DB_NAME: postgen
+        run: go test -race ./...
+
+      # Advisory, not a gate. 17 files are already unformatted on main, so
+      # requiring this would fail every run until they are cleaned up. Promote
+      # to a blocking step once `gofmt -l .` is empty.
+      - name: gofmt (advisory)
+        continue-on-error: true
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::warning::gofmt would rewrite these files:"
+            echo "$unformatted"
+            exit 1
+          fi
+          echo "gofmt clean"
+
+  ui:
+    name: UI
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: postgen-ui
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Vite 8 needs Node 20.19+ or 22.12+. package.json declares no engines
+      # field, so this pin is the only thing stating the requirement.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: postgen-ui/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # Advisory, not a gate. ESLint reports 617 errors on main today - all
+      # react-hooks and react-refresh rules in existing screens, none of them
+      # regressions. Requiring this would make CI red on arrival. Promote once
+      # the count is zero.
+      - name: Lint (advisory)
+        continue-on-error: true
+        run: npm run lint
+
+      # web/ is committed build output that go:embed compiles into the API
+      # binary, so a UI change without a rebuild ships a stale console. This
+      # catches that. Advisory for now: the committed bundle was built on
+      # Windows and this runner is Linux, so byte-identical output is expected
+      # but unproven. Promote to a gate after one clean run confirms it.
+      - name: Embedded web/ assets are up to date (advisory)
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}
+        run: |
+          if ! git diff --exit-code --stat -- web/; then
+            echo "::warning::web/ differs after rebuild - run 'npm run build' in postgen-ui and commit the result"
+            exit 1
+          fi
+          echo "web/ is in sync with postgen-ui"
