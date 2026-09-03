@@ -1,44 +1,55 @@
 # 🚀 PostGen: Affiliate Content Generation & Auto-Publisher
 
 [![Go Version](https://img.shields.io/github/go-mod/go-version/varma322/post-gen?color=00ADD8&logo=go&logoColor=white)](https://golang.org)
-[![React Version](https://img.shields.io/badge/react-v18.0+-61dafb.svg?logo=react&logoColor=white)](https://react.dev)
+[![React Version](https://img.shields.io/badge/react-v19.2+-61dafb.svg?logo=react&logoColor=white)](https://react.dev)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg?style=flat-square)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Status: Active](https://img.shields.io/badge/status-active-success.svg)](#)
 
-A high-performance, developer-friendly automation engine designed to scrape product listings (Amazon & more), enrich them with custom affiliate tags, generate beautiful promotional posts, and publish them directly to Facebook Pages. Complete with an interactive Vite + React web dashboard, an interactive Telegram Bot assistant, Gemini AI copy generator, PostgreSQL integration, and a highly resilient Go CLI backend.
+A high-performance automation engine that pulls Amazon product data (Creators API first, HTML scraper as fallback), enriches it with a local or hosted language model, renders it through per-account Go templates, and publishes it to Facebook Pages on a paced, quota-aware schedule.
+
+It ships as a single binary — a **REST API with an embedded React ops console** — backed by PostgreSQL with a JSON fallback for offline work.
 
 ---
 
 ## 🎨 System Overview
 
-PostGen seamlessly merges scraping, PostgreSQL storage, Gemini AI-powered enrichment, template-driven formatting, and social publishing into a unified pipeline:
-
 ```mermaid
 graph TD
-    A[Product URLs: CLI, API, Bot, or File] --> B[Modular Scraper Engine]
-    B -->|Fetch DOM| C[goquery Parser + selectors.json]
-    C -->|Extract Product Metadata| AI[Gemini AI Enricher]
-    AI -->|Enriched Fields: Title, Headline, Tags| D[Go text/template Generator]
-    D -->|Inject affiliate_tag| E[Generate Promotional Content]
-    E --> F{Publish Action}
-    F -->|Local Output| G[Console / Output Files]
-    F -->|Auto-Publish| H[Facebook Page API with Cooldown]
+    A[URLs: Console, API, or per-account link pool] --> B{Product Fetch}
+    B -->|preferred| B1[Amazon Creators API]
+    B -->|throttled / ineligible| B2[goquery HTML scraper + selectors.json]
+    B1 --> C[Product facts: title, price, image, ASIN]
+    B2 --> C
+    C --> D{AI Enricher}
+    D -->|1st| D1[Ollama - local model]
+    D -->|fallback| D2[Gemini]
+    D1 --> E[Template-aware copy: only fields the .tmpl renders]
+    D2 --> E
+    E --> F[Go text/template + affiliate tag injection]
+    F --> G{Publish path}
+    G -->|manual| H[Console output]
+    G -->|auto-post worker| I[Eligibility check: daily cap, active hours, min delay]
+    I --> J[Facebook Graph API]
+    J --> K[(Events + analytics)]
 ```
+
+Every stage emits a trace-correlated event, so a single post can be followed end to end from the Activity Log.
 
 ---
 
 ## ⚡ Key Features
 
-* **🚀 High-Performance Go Core**: Native multi-threaded scraping and post-generation utilizing concurrent routines and optimized `text/template` caching.
-* **🤖 Gemini-Powered AI Enrichment**: Integrates the Google Gemini (2.0 Flash) API to automatically rewrite product titles, draft punchy headlines, distill key features, compile hashtags, and construct a compelling tagline—all customized using optional per-account tone instructions.
-* **📲 Interactive Telegram Bot Manager**: Fully featured interactive bot with state machine tracking. Send any Amazon URL, preview the AI-generated results for all accounts in real-time, and trigger publication (single or bulk with automatic 15-minute pacing to prevent rate limits) via inline buttons.
-* **🗄️ PostgreSQL Persistence with JSON Fallback**: Modern multi-tenant data storage system storing accounts and generated data. Automatically migrates `accounts.json` profiles into the DB on first boot, and seamlessly falls back to local files if PostgreSQL is offline (dev/offline mode).
-* **🎨 Modern React UI**: Interactive Vite-powered frontend featuring batch imports, live progression tracking via Server-Sent Events (SSE), and a built-in template editor.
-* **📱 Integrated Facebook Auto-Poster**: Direct page publishing through the Facebook Graph API with customizable delay pacing to safely avoid rate limits.
-* **🔍 Dynamic CSS Selector Engine**: Platform DOM mapping stored in a simple `selectors.json` configuration for seamless maintenance when e-commerce pages update.
-* **📁 Robust File Writing Modes**: Supports **Append Mode** (combines run outputs in a single file) or **Split Mode** (creates separate sanitized files per product).
-* **⚠️ Failure-Safe Execution**: Process-safe architecture ensuring an error on a single malformed URL does not crash the bulk processing pipeline.
+* **🛒 Dual-Path Product Fetching**: Uses the **Amazon Creators API** where the account is eligible, and falls back to the `goquery` HTML scraper on throttling (429), ineligibility, or network failure. A circuit breaker keeps a throttled partner tag off the API for a cooldown window (15 min by default, or the server's own `Retry-After`) instead of burning quota on retries.
+* **🧠 Local-First AI Enrichment**: Copy is generated by a **local Ollama model** first (`qwen2.5:7b-instruct` by default), with **Gemini** as the hosted fallback when a key is configured. The provider chain is configurable at runtime from the Settings screen.
+* **🎯 Template-Aware Generation**: The engine introspects each account's `.tmpl` and asks the model for **only the fields that template actually renders** — `dealsvault.tmpl` renders a title alone, so nothing else is requested. Prices, discounts, and affiliate links are never model-written; they stay facts from the fetch.
+* **📊 Quota-Aware Auto-Publisher**: A background worker drains publication jobs against per-account rules — daily post cap, active-hours window (including overnight ranges), and minimum rest between posts. Blocks are classed as retryable (outside window, delay not met) or terminal for the day (cap reached).
+* **⏱️ Recurring Schedules**: Named `interval` or `daily` triggers fire the auto-post pipeline on their own. Missed windows are not replayed — catching up would fire exactly the burst that pacing exists to prevent.
+* **🔗 Per-Account Link Pools**: Each account has a dedicated pool of URLs the pipeline prefers before falling back to the shared product queue, with optional rotation of already-posted links when a pool runs dry.
+* **📈 Analytics & Event Log**: Summary and per-channel analytics over a rolling window — publish volume with period-over-period deltas, queue health, AI success rate by provider, scrape success and HTML-fallback rate. Every pipeline event is stored with a trace ID, level, source, duration, and metadata.
+* **🖥️ PostGen V2 Console**: A ten-screen React 19 operations console — Dashboard, Publisher, Channels, Analytics, Content Queue, Scheduler, Activity Log, Templates, Accounts, Settings — compiled into the Go binary, so the server is a single file.
+* **🗄️ PostgreSQL with JSON Fallback**: Nine migrated tables covering accounts, link pools, queue, jobs, job items, published posts, events, schedules, and settings. `accounts.json` is migrated in on first boot, and the whole app degrades to local files when PostgreSQL is unreachable.
+* **🔐 Bearer Token Auth**: All routes except `/health` sit behind a token when one is configured.
 
 ---
 
@@ -47,26 +58,25 @@ graph TD
 ```text
 post-gen/
 ├── cmd/
-│   ├── cli/             # CLI application entrypoint -> go build ./cmd/cli/
-│   ├── api/             # HTTP REST API server entrypoint -> go build ./cmd/api/
-│   └── bot/             # Telegram Bot daemon entrypoint -> go build ./cmd/bot/
+│   └── api/             # API + console entrypoint  -> go build ./cmd/api/
 ├── internal/
-│   ├── core/            # Reusable engine orchestration (engine.go, types.go)
-│   ├── api/             # HTTP router, middleware, handlers & SSE streams
-│   ├── scraper/         # Interface-based scraping architecture (Amazon helper)
-│   ├── generator/       # Template cache and renderer
+│   ├── core/            # Engine, background worker, schedules, settings, analytics
+│   ├── api/             # Router, middleware, handlers, SSE, analytics/schedules/settings
+│   ├── scraper/         # Creators API client + circuit breaker, HTML scraper, throttling
+│   ├── ai/              # Provider chain (Ollama, Gemini), template introspection, price guards
+│   ├── generator/       # Template cache, renderer, money formatting, introspection
 │   ├── publisher/       # Facebook Graph API publisher
+│   ├── events/          # Buffered, trace-correlated event emitter
+│   ├── db/              # Pool, migrations, CRUD, analytics/schedules/settings queries
 │   ├── config/          # accounts.json and selectors.json loaders
-│   ├── db/              # PostgreSQL DB pool, migrations, and CRUD helper
-│   ├── ai/              # Gemini 2.0 Flash enrichment API client
-│   ├── bot/             # Interactive Telegram bot state machine and callbacks
-│   ├── models/          # Shared domain models (Product, Account)
-│   └── utils/           # Shared helpers (normalization, sanitization)
-├── postgen-ui/          # Single Page React Application (Vite, TailwindCSS)
-├── templates/           # Post templates (*.tmpl)
-├── output/              # Text files generated during CLI runs
-├── accounts.json        # Fallback user profiles, affiliate tags, and FB Page credentials
-└── selectors.json       # CSS selectors for targeting product details
+│   ├── models/          # Domain models (Product, Account, Job, Event, Schedule, Settings…)
+│   └── utils/           # URL normalization, affiliate tagging, sanitization
+├── postgen-ui/          # React 19 + Vite + Tailwind SPA (builds into ../web)
+├── web/                 # Built SPA assets, embedded into the API binary via go:embed
+├── templates/           # Per-account post templates (*.tmpl)
+├── accounts.json        # Fallback account profiles (migrated into PostgreSQL on boot)
+├── selectors.json       # CSS selectors for the HTML scraper
+└── build.ps1            # Builds the UI, then the API binary, into dist/
 ```
 
 ---
@@ -76,83 +86,111 @@ post-gen/
 ### Prerequisites
 
 * **Go**: `1.26.1` or higher
-* **Node.js**: `18.x` or higher (for the frontend panel)
-* **PostgreSQL**: `13` or higher (optional, falls back to `accounts.json` if unreachable)
-* **Gemini API Key**: For AI-powered post enrichment
-* **Telegram Bot Token**: (From [@BotFather](https://t.me/BotFather) on Telegram)
+* **Node.js**: `18.x` or higher (to build the console)
+* **PostgreSQL**: `13` or higher — optional; the app falls back to `accounts.json` when unreachable, but the auto-post worker, schedules, events, and analytics all require it
+* **Ollama**: optional but recommended, for local AI enrichment
+* **Gemini API Key**: optional, used as the hosted enrichment fallback
+* **Amazon Creators API credentials**: optional; without them every fetch uses the HTML scraper
 
-### Clone and Backend Build
+### Clone and Build
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/varma322/post-gen.git
-   cd post-gen
-   ```
+```bash
+git clone https://github.com/varma322/post-gen.git
+cd post-gen
+```
 
-2. Compile binaries locally:
-   ```powershell
-   # Build the CLI application
-   go build -o postgen.exe ./cmd/cli/
+**One-shot build (recommended)** — builds the React console and the API binary into `dist/`:
 
-   # Build the REST API server
-   go build -o postgen-api.exe ./cmd/api/
+```powershell
+.\build.ps1                                  # defaults: -Output dist -Version v2.5.5
+.\dist\postgen-api_v2.5.5.exe --addr :8088
+```
 
-   # Build the Telegram Bot daemon
-   go build -o postgen-bot.exe ./cmd/bot/
-   ```
+**Manual build**:
 
-### Frontend Build
+```powershell
+# 1. Build the console. Vite writes into ../web, which the Go binary embeds.
+cd postgen-ui
+npm install
+npm run build
+cd ..
 
-1. Install dependencies and compile Vite dashboard:
-   ```bash
-   cd postgen-ui
-   npm install
-   npm run build
-   ```
+# 2. Build the binaries
+go build -o postgen-api.exe ./cmd/api/    # REST API + console
+```
+
+> [!IMPORTANT]
+> `web/` is compiled into the API binary with `go:embed`. Rebuild the frontend **before** the Go binary, or the server will serve the previous console build.
+
+### Frontend Development
+
+`npm run dev` proxies every API route to `http://localhost:8088`, so run the API binary alongside it for live reload against real data.
+
+### Tests
+
+```bash
+go test ./...
+```
 
 ---
 
 ## ⚙️ Configuration
 
-### 1. Database & Environment Variables (`.env`)
+### 1. Environment Variables (`.env`)
 
-Create a `.env` file in the project root to configure the PostgreSQL database, Gemini API, and Telegram Bot:
+`.env` is loaded from the working directory at startup and is optional — system environment variables work just as well.
 
 ```env
-# Server Port Configuration
-PORT=8080
-ENV=production
+# --- API Server ---
+POSTGEN_API_TOKEN="your-bearer-token"   # empty = auth disabled (a startup warning is logged)
 
-# Database Configuration (falls back to json if postgresql is offline)
-DB_ENGINE=postgresql
-DB_NAME=postgen
-DB_USER=postgres
-DB_PASSWORD=your_secure_password
+# --- PostgreSQL (falls back to accounts.json when unreachable) ---
 DB_HOST=127.0.0.1
 DB_PORT=5432
+DB_USER=postgres
+DB_PASSWORD=your_secure_password
+DB_NAME=postgen
 
-# Gemini API Key (for AI-powered content enrichment)
+# --- AI enrichment: Ollama is tried first, Gemini second ---
+OLLAMA_HOST=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen2.5:7b-instruct
+OLLAMA_TIMEOUT=45s
 GEMINI_API="AIzaSy..."
+GEMINI_MODEL=gemini-3.5-flash
 
-# Telegram Bot Configurations
-TELEGRAM_BOT_TOKEN="1234567890:ABCdefGhIJKlmNoPQRsTUVwxyZ"
-# Comma-separated list of allowed user IDs. Leave empty to allow all users (dev mode).
-TELEGRAM_ALLOWED_USER_IDS="987654321,123456789"
+# --- Amazon Creators API (omit to always use the HTML scraper) ---
+AMAZON_CREATOR_CLIENT_ID="amzn1.application-oa2-client..."
+AMAZON_CREATOR_CLIENT_SECRET="..."
+AMAZON_CREATOR_PARTNER_TAG="yourtag-21"
+AMAZON_CREATOR_TOKEN_URL="https://api.amazon.com/auth/o2/token"
 
-# Optional System Overrides
+# --- Affiliate tagging ---
+DEFAULT_AFFILIATE_TAG=yourtag-21        # used when an account sets none
+
+# --- Facebook ---
 FACEBOOK_API_VERSION=v19.0
 ```
 
-### 2. `accounts` Schema & `accounts.json` Fallback
+> [!NOTE]
+> Values saved from the **Settings** screen live in the `settings` table and **override the matching environment variable**. Anything unset there falls back to the environment, then to a built-in default. The Settings API reports the source of each value (`database`, `environment`, or `default`), and never returns secrets — only whether one is configured.
 
-Profiles represent affiliate accounts. If PostgreSQL is empty on startup, PostGen will automatically migrate the profiles from `accounts.json` in the root folder to the database.
+### 2. Account Configuration
 
-Each account supports direct templates, Facebook credentials, and **AI-control configurations**:
+Accounts can be managed from the Accounts screen or the `/accounts` API; `accounts.json` is the offline fallback and the source for the first-boot migration.
 
-* **`use_ai`** *(boolean, default true)*: Determines if this account should enrich scraped data via Gemini before rendering the template.
-* **`ai_prompt`** *(string, optional)*: Instructs the AI on specific tone, style, or persona instructions for this account (e.g. "Write in a casual, emoji-heavy style for a young audience.").
-
-Example JSON fallback template:
+| Field | Type | Purpose |
+| :--- | :--- | :--- |
+| `name` | string | Unique account identifier |
+| `template_path` | string | Path to this account's `.tmpl` |
+| `affiliate_tag` | string | Injected into every product link |
+| `facebook_page_id` | string | Target Facebook Page |
+| `facebook_access_token` | string | Long-lived Page access token |
+| `use_ai` | bool | Enrich via the AI chain before rendering (default `true`) |
+| `ai_prompt` | string | Per-account tone/persona instruction |
+| `active` | bool | Participates in auto-post selection (absent = active) |
+| `max_posts_per_day` | int | Daily publish cap; `0` = unlimited |
+| `active_hours_start` / `active_hours_end` | `HH:MM` | Posting window; start after end means overnight |
+| `min_delay_minutes` | int | Minimum rest between consecutive posts |
 
 ```json
 [
@@ -163,14 +201,12 @@ Example JSON fallback template:
     "facebook_page_id": "104857692019482",
     "facebook_access_token": "EAAx...",
     "use_ai": true,
-    "ai_prompt": "Write in a professional, benefit-focused corporate tone."
-  },
-  {
-    "name": "smartbuy",
-    "template_path": "templates/smartbuy.tmpl",
-    "affiliate_tag": "smartbuy-21",
-    "use_ai": true,
-    "ai_prompt": "Write in a casual, emoji-heavy style for a young audience."
+    "ai_prompt": "Write in a professional, benefit-focused corporate tone.",
+    "active": true,
+    "max_posts_per_day": 6,
+    "active_hours_start": "09:00",
+    "active_hours_end": "21:00",
+    "min_delay_minutes": 90
   }
 ]
 ```
@@ -179,147 +215,131 @@ Example JSON fallback template:
 
 ## 🚀 Usage
 
-### 🤖 Telegram Bot Mode
-
-Run PostGen as an interactive Telegram Bot daemon to orchestrate scraping, AI enrichment, and auto-publishing right from your phone:
+### 🌐 API + Console Mode
 
 ```powershell
-.\postgen-bot.exe
+.\postgen-api.exe --addr :8088 --api-token "your-bearer-token"
 ```
 
-#### Bot Setup & Workflow
-1. Start the bot on Telegram by searching for your username (configured via `TELEGRAM_BOT_TOKEN`) and pressing **/start**.
-2. **Send any Amazon product URL** to the bot.
-3. The bot will automatically scrape the URL, run the Gemini AI enricher, and render a preview for each of your configured accounts.
-4. Each preview is accompanied by an inline **`[📢 Publish [account]]`** button. Clicking this button immediately publishes the formatted post to that account's Facebook page.
-5. If you have multiple accounts, you can use the **`[🚀 Publish ALL to Facebook]`** button to publish to all accounts in one click. The bot will automatically manage a **15-minute pacing delay** between posts to safely bypass Facebook API rate limits.
-6. Check current status with `/status` or cancel the active session with `/cancel`.
+Then open `http://localhost:8088`. The background auto-post worker starts automatically when PostgreSQL is connected (15-minute cooldown by default, adjustable in Settings).
+
+#### Console Screens
+
+| Screen | What it does |
+| :--- | :--- |
+| **Dashboard** | Live pipeline state, worker status, recent activity, headline metrics |
+| **Publisher** | Compose and publish with quota-aware channel selection — ineligible channels are shown with the reason |
+| **Channels** | Per-account performance cards and configuration |
+| **Analytics** | Publish trends with deltas, queue health, AI provider outcomes, scrape/fallback rates |
+| **Content Queue** | Shared product queue and per-account link pools, with queue counts kept distinct from in-flight pipeline counts |
+| **Scheduler** | Create, pause, edit, and manually run interval/daily schedules |
+| **Activity Log** | Filterable event stream (level, source, account, type, free-text, time) with trace drill-down |
+| **Templates** | Read, edit, validate, and save `.tmpl` layouts, with backups |
+| **Accounts** | Full account CRUD including rate limits and active hours |
+| **Settings** | AI provider order and models, system prompt, Graph API version, partner tag, worker cooldown, debug logging |
 
 ---
 
-### 🛠️ CLI Mode
+## 📡 API Reference
 
-Run post-generation workflows directly inside your console.
+All routes except `GET /health` require `Authorization: Bearer <token>` when a token is configured. Request bodies are size-limited.
 
-#### Single URL Processing
-Generate a promotional post for a specific affiliate account:
-```powershell
-.\postgen.exe --url "https://www.amazon.in/dp/B0BYN54TM6" --account afficart
-```
+### System
 
-Generate posts for **all** accounts simultaneously:
-```powershell
-.\postgen.exe --url "https://www.amazon.in/dp/B0BYN54TM6" --all
-```
-
-#### 📦 Bulk File Processing
-Write product URLs line-by-line into a text file (e.g. `links.txt`) and process them in a single batch:
-```powershell
-.\postgen.exe --file links.txt --all
-```
-
-#### ⚙️ CLI Flags Reference
-
-| Flag | Type | Description |
+| Method | Route | Description |
 | :--- | :--- | :--- |
-| `--url` | `string` | Single Amazon product link to scrape |
-| `--file` | `string` | Path to a text file containing one URL per line |
-| `--account`| `string` | Target account name from the DB / `accounts.json` |
-| `--all` | `bool` | Run generator for all configured accounts |
-| `--split` | `bool` | Save each product to its own unique sanitized file |
-| `--clear` | `bool` | Wipe the `/output` folder before beginning the current batch run |
+| `GET` | `/health` | Status, DB connectivity, active job, dropped-event count, circuit breaker state |
+| `GET` | `/stats` | Recent published-post statistics |
+| `GET` | `/worker/status` | Worker phase (`idle`/`scraping`/`enriching`/`publishing`/`cooldown`), current account/URL/job, cooldown |
+| `GET` / `PUT` | `/settings` | Read effective settings with per-field source; write partial updates (omitted keys stay unchanged) |
+
+### Generation & Publishing
+
+| Method | Route | Description |
+| :--- | :--- | :--- |
+| `POST` | `/generate` | Synchronous generation. Body: `{ "urls": [...], "accounts": [...], "publish": false, "publish_delay_minutes": 15 }` |
+| `POST` | `/generate/stream` | Same payload over SSE. Events: `progress`, `result`, `done` |
+| `POST` | `/generate/link` | Convert a URL into a tagged affiliate link. Body: `{ "url": "...", "tag": "..." }` |
+| `POST` | `/publish` | Publish prepared copy. Body: `{ "account": "...", "content": "..." }`. Returns `409` when the account's daily cap is already reached |
+
+### Accounts & Link Pools
+
+| Method | Route | Description |
+| :--- | :--- | :--- |
+| `GET` / `POST` | `/accounts` | List or create accounts |
+| `PUT` / `DELETE` | `/accounts/{name}` | Update or delete an account |
+| `GET` / `POST` | `/accounts/{name}/links` | List or add URLs in that account's dedicated pool |
+| `DELETE` | `/accounts/{name}/links/{id}` | Remove one pooled link |
+
+### Queue & Jobs
+
+| Method | Route | Description |
+| :--- | :--- | :--- |
+| `GET` / `POST` | `/products` | List the shared queue, or queue a URL |
+| `DELETE` | `/products/{id}` | Remove a queued product |
+| `POST` | `/jobs` | Trigger an auto-post job. Optional body: `{ "rotate_old_links": true }` |
+| `GET` | `/jobs/active` | The in-flight job and its items, or `{"active": false}` |
+| `POST` | `/jobs/cancel` | Cancel all active jobs |
+
+### Schedules
+
+| Method | Route | Description |
+| :--- | :--- | :--- |
+| `GET` / `POST` | `/schedules` | List or create schedules (`interval` with `interval_minutes`, or `daily` with `daily_at` as `HH:MM`) |
+| `PUT` / `DELETE` | `/schedules/{id}` | Update or delete a schedule |
+| `POST` | `/schedules/{id}/run` | Fire a schedule immediately |
+
+### Events & Analytics
+
+| Method | Route | Description |
+| :--- | :--- | :--- |
+| `GET` | `/events` | Query the event log. Params: `level`, `source`, `account`, `type`, `q`, `since` (RFC3339), `limit` |
+| `GET` | `/events/{traceID}` | Every event for one pipeline run, in order |
+| `GET` | `/analytics/summary` | Rolling-window totals, deltas, queue health, AI and scraper stats. Param: `days` |
+| `GET` | `/analytics/channels` | Per-account performance rows. Param: `days` |
+
+### Templates
+
+| Method | Route | Description |
+| :--- | :--- | :--- |
+| `GET` | `/templates` | All `.tmpl` layouts with the accounts using each |
+| `GET` / `PUT` | `/templates/{name}` | Read or overwrite one template's content |
 
 ---
 
-## 🌐 API & Web Dashboard Mode
+## 🐋 Docker
 
-Launch the unified API + React user interface server:
-```powershell
-.\postgen-api.exe --addr :8088
-```
-
-Once running, navigate to `http://localhost:8088` in your web browser.
-
-### Interactive Dashboard Features
-
-* **⚡ Bulk Input**: Copy-paste a list of URLs directly into a textarea interface.
-* **🟢 Real-Time SSE Stream**: Watch live cards populate as scraping, generation, and Facebook auto-publishing updates stream over Server-Sent Events.
-* **✏️ Integrated Template Editor**: Read, edit, validate, and save your Go template layouts instantly inside the browser with built-in backup safeguards.
-* **📋 Per-Result Diagnostics**: Copy completed posts with a single click, or instantly inspect any detailed failures if product details could not be retrieved.
-
----
-
-## 📡 API Endpoints Reference
-
-### 1. `GET /health`
-Validates backend system integrity.
-* **Response**: `{"status": "OK"}`
-
-### 2. `GET /accounts`
-Retrieves configured account profiles (reads from PostgreSQL with JSON fallback).
-
-### 3. `POST /generate`
-Generates posts synchronously with optional Gemini AI enrichment.
-* **Payload**:
-  ```json
-  {
-    "urls": ["https://www.amazon.in/dp/B0BYN54TM6"],
-    "accounts": ["afficart"]
-  }
-  ```
-
-### 4. `POST /generate/stream`
-Establish a Server-Sent Events connection for progressive batch updates.
-* **Events Emitted**: `progress`, `result`, `done`
-
-### 5. `GET /templates`
-Returns all `.tmpl` layouts stored inside `/templates` with active accounts metadata.
-
----
-
-## 🐋 Docker Setup (Development & Deployment)
-
-Quickly orchestrate and run PostGen using Docker and Docker Compose.
-
-### Dockerfile
+No `Dockerfile` is committed. The following builds a single self-contained image — note that the frontend stage must run first, because its output is embedded into the Go binary rather than copied beside it.
 
 ```dockerfile
-# Build Backend
-FROM golang:1.26.1-alpine AS backend-builder
+# Stage 1: build the console into web/
+FROM node:18-alpine AS frontend
 WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
+COPY postgen-ui/package*.json ./postgen-ui/
+RUN cd postgen-ui && npm install
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o postgen-api ./cmd/api
+RUN cd postgen-ui && npm run build
 
-# Build Frontend
-FROM node:18-alpine AS frontend-builder
-WORKDIR /app/postgen-ui
-COPY postgen-ui/package*.json ./
-RUN npm install
-COPY postgen-ui/ ./
-RUN npm run build
+# Stage 2: build the API binary with web/ embedded
+FROM golang:1.26.1-alpine AS backend
+WORKDIR /app
+COPY --from=frontend /app ./
+RUN go mod download && CGO_ENABLED=0 GOOS=linux go build -o postgen-api ./cmd/api
 
-# Final Stage Image
+# Stage 3: runtime
 FROM alpine:latest
-WORKDIR /root/
-COPY --from=backend-builder /app/postgen-api .
-COPY --from=backend-builder /app/accounts.json .
-COPY --from=backend-builder /app/selectors.json .
-COPY --from=backend-builder /app/templates ./templates
-COPY --from=frontend-builder /app/postgen-ui/dist ./web
+WORKDIR /app
+COPY --from=backend /app/postgen-api .
+COPY --from=backend /app/accounts.json .
+COPY --from=backend /app/selectors.json .
+COPY --from=backend /app/templates ./templates
 EXPOSE 8088
 CMD ["./postgen-api", "--addr", ":8088"]
 ```
 
-### Run Container
-
 ```bash
-# Build the image
 docker build -t postgen-app .
-
-# Start the application container
-docker run -p 8088:8088 --name postgen-service postgen-app
+docker run -p 8088:8088 --env-file .env --name postgen-service postgen-app
 ```
 
 ---
@@ -327,26 +347,32 @@ docker run -p 8088:8088 --name postgen-service postgen-app
 ## 📝 Roadmap
 
 - [x] Extract CLI core business logic into reusable packages
-- [x] Integrate direct Facebook Page auto-posting via Graph API
-- [x] Design Vite + React control panel with real-time SSE streams
-- [x] **AI-Powered Copywriter**: Gemini 2.0 Flash integration for auto-enriching posts per-account
-- [x] **PostgreSQL Database Storage**: Relational DB configuration and automatic migrations on startup
-- [x] **Interactive Telegram Bot Manager**: Fully-functional state machine bot supporting URL scraping, AI preview, and individual/bulk Facebook auto-publishing
-- [ ] Add support for alternate e-commerce platforms (Flipkart, Myntra, etc.)
-- [ ] Implement proxy rotation pool to bypass aggressive scraping blocks
-- [ ] Develop analytics dashboard highlighting Facebook post engagement metrics
+- [x] Facebook Page auto-posting via the Graph API
+- [x] React control panel with real-time SSE streams
+- [x] AI-powered copywriter with per-account tone control
+- [x] PostgreSQL storage with automatic migrations and JSON fallback
+- [x] Amazon Creators API with circuit-breaking HTML fallback
+- [x] Local-model (Ollama) enrichment with hosted fallback and template-aware schemas
+- [x] Per-account rate limits, active hours, and daily publish caps
+- [x] Per-account dedicated link pools with rotation on exhaustion
+- [x] Trace-correlated pipeline event log
+- [x] Recurring interval and daily schedules
+- [x] Analytics dashboard: publish trends, queue health, AI and scraper success rates
+- [ ] Alternate e-commerce platforms (Flipkart, Myntra, etc.)
+- [ ] Proxy rotation pool to survive aggressive scraping blocks
+- [ ] Facebook post engagement metrics pulled back into Analytics
 
 ---
 
 ## 🤝 Contributing
 
-Contributions make the open-source community an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
+1. Fork the project
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a pull request
 
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+Run `go test ./...` before opening a PR, and rebuild `web/` if you touched `postgen-ui/`.
 
 ---
 
@@ -366,5 +392,5 @@ See `LICENSE` for more information.
 * **Repository**: [GitHub/varma322/post-gen](https://github.com/varma322/post-gen)
 * **Project Status**: ACTIVE / In Development
 
-> [!NOTE]
-> Ensure your Facebook Access Tokens are set up as **Long-Lived Page Access Tokens** so they do not expire within 2 hours. Keep your credentials private and never commit `accounts.json` containing sensitive keys to source control.
+> [!WARNING]
+> Use **long-lived Page access tokens** so publishing does not break after two hours. Never commit a populated `accounts.json` or `.env` — both hold live credentials.
