@@ -87,8 +87,11 @@ export default {
       },
       fontFamily: {
         // Inter for reading, Geist for technical metadata and numeric data.
-        // Both are vendored in public/fonts - the Artifact-style CSP is not a
-        // factor here, but the binary must work offline, so no CDN.
+        // Both load from the Google Fonts CDN; there is no public/fonts, and
+        // the previous claim that these were vendored for offline use was not
+        // true. The note at the top of src/index.css is the authority: it
+        // states the network dependency and what vendoring would take. These
+        // names only have to match the families that stylesheet loads.
         "headline": ["Inter", "system-ui", "sans-serif"],
         "display": ["Inter", "system-ui", "sans-serif"],
         "body": ["Inter", "system-ui", "sans-serif"],
