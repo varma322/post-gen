@@ -5,13 +5,6 @@ import (
 	"strings"
 )
 
-// LoggingMiddleware is a placeholder for future request logging and observability.
-func LoggingMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r)
-	})
-}
-
 // BearerTokenMiddleware enforces Bearer token authentication on all routes
 // except those in the provided skip list (e.g. /health).
 // If the configured token is empty, the middleware is a no-op (auth disabled).

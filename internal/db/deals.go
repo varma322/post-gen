@@ -149,17 +149,6 @@ func (p *Pool) SetDealStatus(ctx context.Context, asin, status string) (bool, er
 	return tag.RowsAffected() > 0, nil
 }
 
-// SetDealScore records a recomputed score without disturbing last_seen, so
-// rescoring an existing catalog does not make stale deals look freshly seen.
-func (p *Pool) SetDealScore(ctx context.Context, asin string, score int) (bool, error) {
-	tag, err := p.pool.Exec(ctx, `UPDATE deals SET score = $1 WHERE asin = $2`, score, asin)
-	if err != nil {
-		return false, fmt.Errorf("setting score of deal %s: %w", asin, err)
-	}
-
-	return tag.RowsAffected() > 0, nil
-}
-
 // KnownASINs reports which of the given ASINs are already stored.
 //
 // The Best Sellers fallback calls this before fetching product pages: bestseller

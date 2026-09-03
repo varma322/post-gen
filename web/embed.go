@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-//go:embed index.html app.js styles.css favicon.svg icons.svg
+//go:embed index.html app.js styles.css favicon.svg
 var FS embed.FS
 
 // SPAHandler serves the React single-page application, routing all non-file requests to index.html.

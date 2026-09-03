@@ -71,11 +71,6 @@ func WithSavingTiers(tiers []int) Option {
 	return func(s *Service) { s.tiers = tiers }
 }
 
-// WithMarketplace sets the storefront to search.
-func WithMarketplace(marketplace string) Option {
-	return func(s *Service) { s.marketplace = marketplace }
-}
-
 // WithScorer supplies the scoring function. Without one, deals are stored
 // unscored for a later pass.
 func WithScorer(scorer Scorer) Option {
